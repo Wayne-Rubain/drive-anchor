@@ -1,0 +1,105 @@
+# Drive Anchor configuration
+#
+# Copy to config.yaml and edit. config.yaml is gitignored -- keep it that way.
+# There are no credentials in this file by design; see "DSM access" below.
+
+# ---------------------------------------------------------------------------
+# Safety
+# ---------------------------------------------------------------------------
+# true  = print what would happen, change nothing. THE DEFAULT, on purpose.
+# false = actually release, eject and bind.
+#
+# Leave this true until you have run `drive-anchor status` and `detach`
+# once and read the output. You can also override per-run with --live.
+dry_run: true
+
+# ---------------------------------------------------------------------------
+# Drives
+# ---------------------------------------------------------------------------
+# One entry per USB drive you want kept at a fixed path.
+#
+#   uuid  -- filesystem UUID. Find it with:  blkid /dev/usbNp1
+#            This is the drive's stable identity. Unlike /dev/usbN it does
+#            not change when devices are re-enumerated in a different order.
+#   path  -- the fixed /volume1 path the drive will always be reachable at.
+#            Point Docker, media servers and backup jobs here, never at
+#            /volumeUSBn, which is outside /volume1 and not usable by them.
+#   name  -- a label for the CLI. Optional; defaults to the last path segment.
+#   share -- the DSM share name, used only to pause indexing. Optional.
+#
+# BEFORE ADDING A DRIVE, its DSM share must exist -- but do NOT create it
+# with Control Panel > Shared Folder > Create. That makes a folder on the
+# internal volume with no connection to the USB device, and it will look
+# like it worked. Instead, plug the drive in, let DSM auto-create its share
+# (it appears as "usbshareN"), then RENAME that share to the name you want.
+#
+# `drive-anchor add` finds attached drives and prints entries for you.
+drives:
+  - name: media
+    uuid: "00000000-0000-0000-0000-000000000000"
+    path: /volume1/USB_Media
+    share: USB_Media
+
+  - name: backup
+    uuid: "11111111-1111-1111-1111-111111111111"
+    path: /volume1/USB_Backup
+    share: USB_Backup
+
+# ---------------------------------------------------------------------------
+# DSM access
+# ---------------------------------------------------------------------------
+# Ejecting requires an authenticated admin session against DSM's web API.
+#
+# CREDENTIALS ARE NOT SET HERE. Provide them in the environment:
+#     DRIVE_ANCHOR_DSM_ACCOUNT
+#     DRIVE_ANCHOR_DSM_PASSWORD
+# Config files get pasted into forum posts and committed to git by accident.
+# Environment variables do not.
+dsm:
+  host: localhost
+  port: 5001
+  use_https: true
+  # DSM uses a self-signed certificate on its own port. Verification is off
+  # for that reason; it is a localhost connection that never leaves the NAS.
+  verify_tls: false
+  session_name: DriveAnchor
+
+  # How long to keep polling DSM's device list for confirmation that a drive
+  # really ejected. An eject command can report failure and still have
+  # worked, so confirmation is what actually decides the outcome.
+  eject_confirm_timeout_sec: 45
+  eject_retries: 3
+
+# ---------------------------------------------------------------------------
+# Services to pause before detaching
+# ---------------------------------------------------------------------------
+# A running media server holds files open, which makes ejects fail. Worse,
+# an indexer that scans a share while the drive is away concludes the content
+# was deleted and rewrites its database. Pausing both avoids that.
+#
+# Leave the lists empty if you do not run media servers.
+quiesce:
+  # DSM package names, exactly as `synopkg list` reports them.
+  # Examples: EmbyServer, PlexMediaServer, Jellyfin
+  packages: []
+
+  # Share names to pause DSM's own file indexing on, usually the same
+  # shares your drives are mounted as.
+  index_shares: []
+
+# ---------------------------------------------------------------------------
+# Timing
+# ---------------------------------------------------------------------------
+# How long to wait for a drive to appear after power or a reconnect.
+#
+# 90 seconds is deliberately generous. Hardware varies enormously: some
+# enclosures re-enumerate in two seconds, while some powered docks reliably
+# take over a minute. Declaring a drive dead too early is the most common
+# false alarm with this kind of tool. Measure your slowest device before
+# lowering this.
+bind_wait_sec: 90
+bind_poll_sec: 3
+
+# How many times to re-run the bind and re-check before giving up.
+verify_attempts: 3
+verify_retry_sec: 10

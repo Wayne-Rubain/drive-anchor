@@ -1,0 +1,47 @@
+# Drive Anchor
+#
+# This container is not a daemon. It runs a command and exits, so bring it
+# up with `run`, not `up -d`:
+#
+#     docker compose run --rm drive-anchor status
+#     docker compose run --rm drive-anchor list
+#     docker compose run --rm drive-anchor detach --live
+#     docker compose run --rm drive-anchor attach --live
+#
+# READ THIS BEFORE RUNNING IT
+# ---------------------------
+# The privileges below amount to root on your NAS. Each one is needed for a
+# specific reason, explained in README.md under "Why this needs so much
+# privilege". If you are not comfortable granting them, that is a reasonable
+# position -- read drive_anchor/host.py first, which is the only file that
+# uses them, and decide from there.
+
+services:
+  drive-anchor:
+    build: .
+    image: drive-anchor:latest
+    container_name: drive-anchor
+
+    # Required to enter PID 1's mount namespace. Without it, `nsenter
+    # --target 1` cannot find the host's init process, and any bind mount
+    # this tool creates would be visible only inside the container.
+    pid: host
+
+    # Required to mount, unmount, and read the host's block devices.
+    privileged: true
+
+    # DSM's API is on the NAS itself, so the container talks to localhost.
+    network_mode: host
+
+    environment:
+      # Credentials come from the environment, never from config.yaml.
+      # Put them in a .env file next to this one (it is gitignored):
+      #     DRIVE_ANCHOR_DSM_ACCOUNT=your_admin_user
+      #     DRIVE_ANCHOR_DSM_PASSWORD=...
+      - DRIVE_ANCHOR_DSM_ACCOUNT
+      - DRIVE_ANCHOR_DSM_PASSWORD
+
+    volumes:
+      # Your configuration, read-only. Change the left side to wherever you
+      # keep it.
+      - ./config.yaml:/data/config.yaml:ro

@@ -1,0 +1,24 @@
+# Real configuration and secrets -- NEVER commit these.
+config.yaml
+*.local.yaml
+.env
+.env.*
+secrets/
+
+# Backups produced by the deploy convention
+*.backup-*
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
