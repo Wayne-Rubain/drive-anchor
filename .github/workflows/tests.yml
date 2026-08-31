@@ -1,0 +1,69 @@
+name: tests
+
+# Every test here is self-contained: no NAS is contacted, no real mounts are
+# made, and the filesystem checks are pointed at temporary directories. That
+# is what makes them runnable on a stock GitHub runner at all.
+#
+# What this CANNOT tell you is whether the tool works against a real Synology.
+# The parts that touch DSM's undocumented API and the host mount namespace are
+# exercised through mocks, so a green run means the logic and the request
+# shapes are intact, not that your hardware is happy. That check still has to
+# happen on an actual NAS.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9  -- a realistic floor for running natively on an older DSM,
+        #         where you get whatever Python the NAS happens to ship
+        # 3.12 -- what the Dockerfile pins, so this is the path most people
+        #         will actually run
+        # 3.13 -- catches deprecations before they become breakage
+        python-version: ["3.9", "3.12", "3.13"]
+
+    name: python ${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        # Pinned to the same versions the Dockerfile installs, so CI is
+        # testing what ships rather than whatever resolved today.
+        run: pip install --no-cache-dir requests==2.32.3 pyyaml==6.0.2
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Check the shell wrapper parses
+        # It is POSIX sh, not bash, and a syntax error in it would only show
+        # up when somebody tried to run the tool.
+        run: sh -n ./drive-anchor
+
+  docker:
+    name: docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t drive-anchor:ci .
+
+      - name: The CLI runs inside the image
+        # Proves the entrypoint and the COPY paths are right. --help needs no
+        # config, no privileges and no NAS, so it is the one command that can
+        # be checked here.
+        run: docker run --rm drive-anchor:ci --help
