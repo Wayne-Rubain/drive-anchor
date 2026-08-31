@@ -2,11 +2,15 @@
 
     drive-anchor status     is everything where it should be?
     drive-anchor list       what USB devices exist, and are they configured?
-    drive-anchor detach     safely release and eject
+    drive-anchor detach     safely release and eject, keeping it configured
     drive-anchor attach     bind, verify, resume services
     drive-anchor repair     fix broken binds if any -- built for a schedule
     drive-anchor add        discover a new drive and produce its config entry
-    drive-anchor remove     detach one drive and show how to unconfigure it
+    drive-anchor remove     take a drive off for good, and unconfigure it
+
+`detach` and `remove` perform the same safe eject. They differ in intent:
+`detach` expects the drive back, `remove` does not, and so also tells you
+what to delete from the config.
 
 `add` and `remove` deliberately do not rewrite your config file. Editing
 YAML programmatically destroys comments and reorders keys, and this is a
@@ -270,7 +274,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="discover a new drive and print its config")
 
     d = sub.add_parser("detach", parents=[common],
-                       help="safely release and eject")
+                       help="safely release and eject; stays configured, "
+                            "for a drive you intend to bring back")
     d.add_argument("--drive", action="append",
                    help="only this drive, by name (repeatable). Default: all.")
 
@@ -283,7 +288,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="override the hourly repair cap (default from config)")
 
     r = sub.add_parser("remove", parents=[common],
-                       help="detach one drive and unconfigure it")
+                       help="take a drive off the NAS for good: eject it, "
+                            "then show how to unconfigure it")
     r.add_argument("name", help="configured drive name")
     return p
 

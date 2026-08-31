@@ -146,6 +146,21 @@ is nothing to `up -d` and nothing left running afterwards.
 Without `--live`, the config's `dry_run` setting applies, and it defaults to
 true. Run everything once without `--live` first.
 
+### Which command do I want?
+
+| What you are doing | Command |
+|---|---|
+| Checking everything is where it should be | `status` |
+| Taking a drive out for a while, then putting it back | `detach --drive <name>` |
+| **Taking a drive off the NAS for good** | **`remove <name>`** |
+| Powering down or moving the whole NAS | `detach` |
+| Putting everything back afterwards | `attach` |
+| Something broke and you want it fixed | `repair` |
+
+`detach` and `remove` do the same safe eject. The difference is what happens
+next: `detach` expects the drive back, `remove` assumes you are finished with
+it and tells you how to unconfigure it.
+
 `./drive-anchor` is a small wrapper that finds the repo, loads `.env`, and
 runs the container for you. It passes your arguments through untouched and
 preserves the exit code, so `status` still exits non-zero when a drive is
@@ -224,19 +239,39 @@ tell which kind of share you actually have, and how to recover if you already
 created one the wrong way. The wrong way looks like it worked and can quietly
 fill your internal disk, so it is worth five minutes.
 
-### Removing a drive
+### Removing a drive for good
+
+This is the one to use when you are finished with a drive and taking it off
+the NAS permanently. Three steps.
+
+**1. Remove it.**
 
 ```bash
 ./drive-anchor remove media --live
 ```
 
-It releases the bind, ejects the drive, confirms DSM agrees it is gone, and
-then prints the config lines to delete. It will not tell you the drive is
-safe to unplug unless the eject was actually confirmed.
+That releases the bind, asks DSM to eject the drive, and waits until DSM
+confirms it has really gone. **It will not tell you the drive is safe to
+unplug unless the eject was actually confirmed**, so if it says the drive is
+safe, it is.
 
-`add` and `remove` do not rewrite `config.yaml`. Editing YAML
-programmatically destroys comments and reorders keys, and this is a file
-people annotate.
+It then prints the lines to delete from `config.yaml`. It does not edit the
+file for you: editing YAML programmatically destroys comments and reorders
+everything, and that file is one people annotate.
+
+**2. Unplug it**, once step 1 says it is safe.
+
+**3. Delete its shared folder in DSM**, if you want the drive gone from the
+NAS entirely rather than just unplugged.
+
+> Control Panel > Shared Folder > select it > Delete
+
+Skip step 3 and the folder lingers in DSM as a leftover pointing at nothing.
+Harmless, but it clutters the list and gets confusing the next time you add a
+drive.
+
+If you are only unplugging the drive for a while and intend to bring it back,
+use `detach --drive <name>` instead and leave the configuration alone.
 
 ---
 
