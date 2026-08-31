@@ -1,0 +1,131 @@
+#!/bin/sh
+# drive-anchor -- run Drive Anchor without remembering the plumbing.
+#
+#     drive-anchor status
+#     drive-anchor detach --live
+#
+# instead of cd'ing to the repo and typing a docker compose incantation.
+#
+# This is plumbing and nothing more. It adds no defaults, rewrites no flags,
+# and makes no decisions -- everything after the script name is handed to the
+# CLI untouched. The moment a wrapper knows something the tool does not, there
+# are two sources of truth and they drift apart.
+#
+# The point of it is DSM Task Scheduler, which wants one absolute command
+# line and no working directory assumptions:
+#
+#     /volume1/docker/drive-anchor/drive-anchor attach
+#
+# Written for POSIX sh (DSM's /bin/sh is BusyBox ash, not bash).
+#
+# Environment:
+#   DRIVE_ANCHOR_MODE   auto (default) | docker | native
+#   DRIVE_ANCHOR_CONFIG path to config.yaml, overriding ./config.yaml
+
+set -eu
+
+# --- locate the repo, following symlinks so this can live on your PATH -----
+script="$0"
+while [ -L "$script" ]; do
+    target=$(readlink "$script")
+    case "$target" in
+        /*) script="$target" ;;
+        *)  script="$(dirname "$script")/$target" ;;
+    esac
+done
+HERE=$(cd -- "$(dirname -- "$script")" && pwd)
+
+die() { echo "drive-anchor: $*" >&2; exit 2; }
+
+# --- credentials ----------------------------------------------------------
+# DSM account and password must be in the environment; the config file never
+# holds them. Anything already exported wins, so a Task Scheduler job or a
+# parent shell can supply them instead of the file.
+if [ -f "$HERE/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$HERE/.env"
+    set +a
+fi
+
+CONFIG="${DRIVE_ANCHOR_CONFIG:-$HERE/config.yaml}"
+if [ ! -f "$CONFIG" ]; then
+    die "no config file at $CONFIG
+  Create one from the template:
+      cp $HERE/config.example.yaml $HERE/config.yaml
+  then edit it, or set DRIVE_ANCHOR_CONFIG to point somewhere else."
+fi
+
+# --- find docker ----------------------------------------------------------
+# Synology installs it outside the default PATH, and the package was renamed
+# from Docker to Container Manager in DSM 7.2, so check both locations.
+find_docker() {
+    if command -v docker >/dev/null 2>&1; then command -v docker; return; fi
+    for candidate in \
+        /var/packages/ContainerManager/target/usr/bin/docker \
+        /var/packages/Docker/target/usr/bin/docker
+    do
+        [ -x "$candidate" ] && { echo "$candidate"; return; }
+    done
+    return 1
+}
+
+MODE="${DRIVE_ANCHOR_MODE:-auto}"
+DOCKER=$(find_docker || true)
+
+if [ "$MODE" = "auto" ]; then
+    if [ -n "$DOCKER" ] && [ -f "$HERE/docker-compose.yml" ]; then
+        MODE=docker
+    else
+        MODE=native
+    fi
+fi
+
+# --- run ------------------------------------------------------------------
+# In both branches the command is exec'd or its status passed straight
+# through. `status` exits 1 when a drive is missing, and a scheduled job or
+# monitoring check has to be able to see that -- a wrapper that swallows the
+# exit code is worse than no wrapper at all.
+
+if [ "$MODE" = "docker" ]; then
+    [ -n "$DOCKER" ] || die "Docker not found. Install Container Manager from
+  Package Center, or set DRIVE_ANCHOR_MODE=native to run directly."
+
+    # docker-compose.yml already mounts ./config.yaml. Only pass an explicit
+    # -v when the config lives somewhere else, because mounting two sources
+    # onto the same container path is undefined behaviour.
+    if [ "$CONFIG" = "$HERE/config.yaml" ]; then
+        MOUNT_CONFIG=""
+    else
+        MOUNT_CONFIG="-v $CONFIG:/data/config.yaml:ro"
+    fi
+
+    # compose v2 is a docker subcommand; v1 was a separate binary.
+    if "$DOCKER" compose version >/dev/null 2>&1; then
+        # shellcheck disable=SC2086  # MOUNT_CONFIG must word-split or be absent
+        exec "$DOCKER" compose --project-directory "$HERE" \
+             -f "$HERE/docker-compose.yml" \
+             run --rm $MOUNT_CONFIG drive-anchor "$@"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
+        exec docker-compose --project-directory "$HERE" \
+             -f "$HERE/docker-compose.yml" \
+             run --rm $MOUNT_CONFIG drive-anchor "$@"
+    else
+        die "Docker is installed but 'docker compose' is not available.
+  Set DRIVE_ANCHOR_MODE=native to run without it."
+    fi
+fi
+
+# Native: no container. host.py compares its own mount namespace against
+# PID 1's and skips nsenter when they already match, so the same code path
+# works here with no configuration.
+command -v python3 >/dev/null 2>&1 \
+    || die "python3 not found, and Docker is unavailable. One of them is required."
+
+# PYTHONPATH, not a cd: the package must be importable from wherever the
+# caller happened to be standing, and any relative path they passed in their
+# arguments has to keep working.
+PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}" \
+DRIVE_ANCHOR_CONFIG="$CONFIG" \
+exec python3 -m drive_anchor.cli "$@"

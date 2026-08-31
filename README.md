@@ -111,11 +111,11 @@ Both files are gitignored. Keep it that way.
 
 ```bash
 docker compose build
-docker compose run --rm drive-anchor status
+./drive-anchor status
 ```
 
-This container is **not a daemon**. It runs one command and exits, which is
-why the examples use `run --rm` rather than `up -d`.
+This container is **not a daemon**. It runs one command and exits, so there
+is nothing to `up -d` and nothing left running afterwards.
 
 ---
 
@@ -123,23 +123,43 @@ why the examples use `run --rm` rather than `up -d`.
 
 ```bash
 # What USB drives exist, and which are configured?
-docker compose run --rm drive-anchor list
+./drive-anchor list
 
 # Are all my configured drives actually present and populated?
-docker compose run --rm drive-anchor status
+./drive-anchor status
 
 # Bind everything to its stable path and verify
-docker compose run --rm drive-anchor attach --live
+./drive-anchor attach --live
 
 # Safely release and eject everything
-docker compose run --rm drive-anchor detach --live
+./drive-anchor detach --live
 
 # Just one drive
-docker compose run --rm drive-anchor detach --drive media --live
+./drive-anchor detach --drive media --live
 ```
 
 Without `--live`, the config's `dry_run` setting applies, and it defaults to
 true. Run everything once without `--live` first.
+
+`./drive-anchor` is a small wrapper that finds the repo, loads `.env`, and
+runs the container for you. It passes your arguments through untouched and
+preserves the exit code, so `status` still exits non-zero when a drive is
+missing. Set `DRIVE_ANCHOR_MODE=native` to skip Docker and run directly with
+python3 instead.
+
+### Running it on a schedule
+
+The wrapper takes an absolute path, which is what DSM's Task Scheduler wants.
+Create a Triggered Task > User-defined script, running as root:
+
+```
+/volume1/docker/drive-anchor/drive-anchor attach
+```
+
+On a **boot-up** trigger that re-establishes your stable paths after a
+restart. On a **scheduled** trigger it pairs with Hyper Backup's "eject
+after backup": the backup ejects the drive, and a later `attach` brings it
+back and re-binds it, which otherwise needs doing by hand.
 
 ### Adding a drive
 
@@ -151,15 +171,15 @@ undo.
 1. Plug the drive in and let DSM auto-create its share -- it appears as
    `usbshareN` in Control Panel > Shared Folder
 2. **Rename** that share to what you want (Edit > General > Name)
-3. Run `drive-anchor add`, which finds the drive and prints its config entry
+3. Run `./drive-anchor add`, which finds the drive and prints its config entry
 4. Paste that into the `drives:` list in `config.yaml` and edit the name
    and path
-5. `drive-anchor attach --live`
+5. `./drive-anchor attach --live`
 
 ### Removing a drive
 
 ```bash
-docker compose run --rm drive-anchor remove media --live
+./drive-anchor remove media --live
 ```
 
 It releases the bind, ejects the drive, confirms DSM agrees it is gone, and
@@ -183,6 +203,17 @@ Raise `bind_wait_sec` before concluding the drive is faulty.
 
 **A drive shows "mounted but empty"** -- the device is present but the bind
 is wrong. Re-run `attach`. Do not power-cycle the drive; it is live.
+
+**A drive shows "mounted, but the backing device is gone"** -- this is the
+stale bind, and it is the reason the device check exists. The drive dropped
+off USB and came back under a different device node; DSM remounted it
+correctly, but the `/volume1` bind still points at the node that no longer
+exists. `ls` through the bind will happily list files from cache, so nothing
+looks wrong until a write is silently lost. Run `attach --live` to rebind.
+
+Some hardware does this spontaneously, with no power cut involved -- powered
+docks especially. If you see it repeatedly on one drive, a scheduled
+`status` is a cheap way to catch it early.
 
 **Eject fails with the drive apparently idle** -- something still has it
 open. Add the responsible package to `quiesce.packages`.
