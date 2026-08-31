@@ -22,3 +22,6 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Writable repair state created by docker-compose
+state/

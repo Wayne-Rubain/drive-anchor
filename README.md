@@ -147,6 +147,35 @@ preserves the exit code, so `status` still exits non-zero when a drive is
 missing. Set `DRIVE_ANCHOR_MODE=native` to skip Docker and run directly with
 python3 instead.
 
+### Fixing a broken bind automatically
+
+```bash
+./drive-anchor repair --live
+```
+
+`repair` is the unattended version of `attach`. It checks first, fixes only
+what is actually broken, and **refuses in the two cases where fixing would be
+wrong**:
+
+- **Every drive is missing.** That is not a stale bind, it is the enclosure
+  being off or a restore still running. Re-binding would wait the full
+  timeout for each drive and fix nothing.
+- **It has already repaired too often this hour** (3 by default). A bind that
+  keeps breaking means the drive is dropping off the USB bus, and silently
+  papering over that until the drive dies is worse than not fixing it at all.
+
+Exit codes are the interface, because the caller is usually a scheduler:
+
+| Code | Meaning |
+|---|---|
+| `0` | Nothing was wrong, or it was fixed |
+| `1` | Still broken, or repair was refused -- a person is needed |
+
+This matters more than it sounds. A stale bind is not inert: the path is
+still mounted, `ls` still lists files from cache, and writes still appear to
+succeed while landing nowhere. The gap between breaking and noticing is the
+gap in which a backup job reports success and writes nothing.
+
 ### Running it on a schedule
 
 The wrapper takes an absolute path, which is what DSM's Task Scheduler wants.
@@ -160,6 +189,15 @@ On a **boot-up** trigger that re-establishes your stable paths after a
 restart. On a **scheduled** trigger it pairs with Hyper Backup's "eject
 after backup": the backup ejects the drive, and a later `attach` brings it
 back and re-binds it, which otherwise needs doing by hand.
+
+For an ongoing watch, schedule `repair` instead -- hourly is reasonable:
+
+```
+/volume1/docker/drive-anchor/drive-anchor repair --live
+```
+
+It is quiet and exits 0 when nothing is wrong, so it only shows up in Task
+Scheduler's notifications when something actually needs you.
 
 ### Adding a drive
 

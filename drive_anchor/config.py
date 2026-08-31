@@ -82,11 +82,29 @@ class QuiesceConfig:
 
 
 @dataclass
+class RepairConfig:
+    """Limits on unattended repair.
+
+    max_per_hour exists so self-healing cannot quietly paper over a drive
+    that is dropping off the bus every few minutes. Past the cap, `repair`
+    stops fixing and starts complaining, which is the only way the problem
+    ever reaches a person.
+
+    state_dir must be writable for the cap to survive between scheduled runs.
+    If it is not, repair still works but the cap is not enforced across
+    invocations, and it says so.
+    """
+    max_per_hour: int = 3
+    state_dir: str = "/data/state"
+
+
+@dataclass
 class Config:
     dry_run: bool = True
     drives: List[Drive] = field(default_factory=list)
     dsm: DsmConfig = field(default_factory=DsmConfig)
     quiesce: QuiesceConfig = field(default_factory=QuiesceConfig)
+    repair: RepairConfig = field(default_factory=RepairConfig)
     bind_wait_sec: int = 90
     bind_poll_sec: int = 3
     verify_attempts: int = 3
@@ -173,11 +191,18 @@ def _build(raw: dict) -> Config:
     quiesce = QuiesceConfig(**{k: v for k, v in q_raw.items()
                                if k in QuiesceConfig.__dataclass_fields__})
 
+    r_raw = raw.get("repair") or {}
+    if not isinstance(r_raw, dict):
+        raise ConfigError("'repair' must be a mapping")
+    repair = RepairConfig(**{k: v for k, v in r_raw.items()
+                             if k in RepairConfig.__dataclass_fields__})
+
     cfg = Config(
         dry_run=bool(raw.get("dry_run", True)),
         drives=drives,
         dsm=dsm,
         quiesce=quiesce,
+        repair=repair,
     )
     for key in ("bind_wait_sec", "bind_poll_sec", "verify_attempts", "verify_retry_sec"):
         if key in raw:

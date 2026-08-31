@@ -88,6 +88,30 @@ quiesce:
   index_shares: []
 
 # ---------------------------------------------------------------------------
+# Unattended repair
+# ---------------------------------------------------------------------------
+# Used by `drive-anchor repair`, which is the version meant for a schedule:
+# it checks first, fixes only what is broken, and refuses where fixing would
+# be wrong.
+#
+# It always refuses in two cases, neither of which is configurable:
+#   - EVERY drive is missing. That is not a stale bind, it is the enclosure
+#     being off or a restore still running. Re-binding would wait the full
+#     timeout per drive and fix nothing.
+#   - The hourly cap below has been reached.
+repair:
+  # A bind that keeps breaking means the drive is dropping off the USB bus.
+  # Past this many repairs in a rolling hour, repair stops fixing and starts
+  # reporting -- otherwise self-healing hides a failing drive until it dies.
+  max_per_hour: 3
+
+  # Where the repair history is kept, so the cap survives between scheduled
+  # runs. Must be WRITABLE -- mount it in docker-compose.yml. If it is not
+  # writable, repair still works but the cap is not enforced across runs and
+  # it warns you.
+  state_dir: /data/state
+
+# ---------------------------------------------------------------------------
 # Timing
 # ---------------------------------------------------------------------------
 # How long to wait for a drive to appear after power or a reconnect.

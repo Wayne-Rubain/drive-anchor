@@ -4,6 +4,7 @@
     drive-anchor list       what USB devices exist, and are they configured?
     drive-anchor detach     safely release and eject
     drive-anchor attach     bind, verify, resume services
+    drive-anchor repair     fix broken binds if any -- built for a schedule
     drive-anchor add        discover a new drive and produce its config entry
     drive-anchor remove     detach one drive and show how to unconfigure it
 
@@ -21,7 +22,7 @@ import logging
 import sys
 from typing import List
 
-from . import binds, config as config_mod, host, quiesce, verify
+from . import binds, config as config_mod, host, quiesce, repair as repair_mod, verify
 from .config import Config, ConfigError
 from .dsm import DsmApiError, DsmClient
 from .sequence import SequenceError, attach, detach, dev_id_for
@@ -34,8 +35,10 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _load(args) -> Config:
-    cfg = config_mod.load(args.config)
-    if args.live:
+    # getattr with a default: the shared flags use argparse.SUPPRESS, so they
+    # are absent from the namespace entirely when not given.
+    cfg = config_mod.load(getattr(args, "config", None))
+    if getattr(args, "live", False):
         cfg.dry_run = False
     return cfg
 
@@ -136,6 +139,34 @@ def cmd_attach(cfg: Config, args) -> int:
     return 1
 
 
+def cmd_repair(cfg: Config, args) -> int:
+    """Check, and fix only what is broken. Built to run unattended.
+
+    Exit code is the interface here, because the caller is usually a
+    scheduler rather than a person:
+        0  nothing was wrong, or it was fixed
+        1  something is still wrong and a human is needed
+    """
+    if args.max_per_hour is not None:
+        cfg.repair.max_per_hour = args.max_per_hour
+
+    outcome = repair_mod.run(cfg)
+
+    if outcome.situation == repair_mod.HEALTHY:
+        return 0
+    if outcome.refused_reason:
+        print(f"\nNot repaired: {outcome.refused_reason}", file=sys.stderr)
+        return outcome.exit_code
+    if outcome.repaired:
+        print(f"\nRepaired: {', '.join(outcome.repaired)}"
+              f"  ({outcome.repairs_this_hour} repair(s) this hour)")
+    if outcome.remaining:
+        print("Still broken:", file=sys.stderr)
+        for p in outcome.remaining:
+            print(f"  - {p}", file=sys.stderr)
+    return outcome.exit_code
+
+
 def cmd_add(cfg: Config, args) -> int:
     """Find drives that are attached but not configured, and emit their YAML."""
     configured = {d.uuid for d in cfg.drives}
@@ -204,30 +235,55 @@ def cmd_remove(cfg: Config, args) -> int:
 # ---------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
+    # The global flags are attached to BOTH the top-level parser and every
+    # subcommand, so `--live repair` and `repair --live` both work. People
+    # reach for the second form naturally, and having it fail with
+    # "unrecognized arguments" is a miserable first impression.
+    #
+    # default=SUPPRESS is what makes that safe: without it, a subparser
+    # re-parsing the same flag would write its own default back over a value
+    # already set before the subcommand, so `--live repair` would silently
+    # run in dry-run mode. Absent flags simply do not appear on the
+    # namespace, so read them with getattr and a default.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--config", default=argparse.SUPPRESS,
+                        help="path to config.yaml (default: "
+                             "$DRIVE_ANCHOR_CONFIG or /data/config.yaml)")
+    common.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                        help="actually make changes. Without this, the "
+                             "config's dry_run setting applies, and it "
+                             "defaults to true.")
+    common.add_argument("-v", "--verbose", action="store_true",
+                        default=argparse.SUPPRESS)
+
     p = argparse.ArgumentParser(
-        prog="drive-anchor",
+        prog="drive-anchor", parents=[common],
         description="Keep Synology USB drives at stable /volume1 paths, and "
                     "detach them without corrupting anything.")
-    p.add_argument("--config", default=None,
-                   help="path to config.yaml (default: $DRIVE_ANCHOR_CONFIG "
-                        "or /data/config.yaml)")
-    p.add_argument("--live", action="store_true",
-                   help="actually make changes. Without this, the config's "
-                        "dry_run setting applies, and it defaults to true.")
-    p.add_argument("-v", "--verbose", action="store_true")
 
     sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("status", help="are all configured drives present?")
-    sub.add_parser("list", help="show every USB drive, configured or not")
-    sub.add_parser("add", help="discover a new drive and print its config")
+    sub.add_parser("status", parents=[common],
+                   help="are all configured drives present?")
+    sub.add_parser("list", parents=[common],
+                   help="show every USB drive, configured or not")
+    sub.add_parser("add", parents=[common],
+                   help="discover a new drive and print its config")
 
-    d = sub.add_parser("detach", help="safely release and eject")
+    d = sub.add_parser("detach", parents=[common],
+                       help="safely release and eject")
     d.add_argument("--drive", action="append",
                    help="only this drive, by name (repeatable). Default: all.")
 
-    sub.add_parser("attach", help="bind, verify, and resume services")
+    sub.add_parser("attach", parents=[common],
+                   help="bind, verify, and resume services")
 
-    r = sub.add_parser("remove", help="detach one drive and unconfigure it")
+    rp = sub.add_parser("repair", parents=[common],
+                        help="fix broken binds if any; for scheduled runs")
+    rp.add_argument("--max-per-hour", type=int, default=None,
+                    help="override the hourly repair cap (default from config)")
+
+    r = sub.add_parser("remove", parents=[common],
+                       help="detach one drive and unconfigure it")
     r.add_argument("name", help="configured drive name")
     return p
 
@@ -235,12 +291,13 @@ def build_parser() -> argparse.ArgumentParser:
 COMMANDS = {
     "status": cmd_status, "list": cmd_list, "detach": cmd_detach,
     "attach": cmd_attach, "add": cmd_add, "remove": cmd_remove,
+    "repair": cmd_repair,
 }
 
 
 def main(argv: List[str] = None) -> int:
     args = build_parser().parse_args(argv)
-    _setup_logging(args.verbose)
+    _setup_logging(getattr(args, "verbose", False))
     try:
         cfg = _load(args)
     except ConfigError as exc:

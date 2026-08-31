@@ -45,3 +45,9 @@ services:
       # Your configuration, read-only. Change the left side to wherever you
       # keep it.
       - ./config.yaml:/data/config.yaml:ro
+
+      # Writable state. Only `repair` uses this, to remember how often it has
+      # already repaired so it can refuse to keep papering over a drive that
+      # is dropping off the bus. Without it, repair still works but cannot
+      # enforce that cap between scheduled runs.
+      - ./state:/data/state
