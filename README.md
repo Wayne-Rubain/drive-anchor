@@ -276,6 +276,25 @@ verify. That is the gap this fills.
 
 ---
 
+## How this was built
+
+I had the problem first, I run a Synology NAS in my RV with five USB drives
+(4 in a USB enclosure, 1 in a stand-alone dock), and I hit most of the
+failures described above the hard way, including a stale bind that silently
+ate writes while every monitor I had said everything was ok.
+
+The original version has been running on my own NAS for months. This public
+version was extracted from it and largely written with Claude Code, working
+from that system and from my notes on what had already gone wrong. The design
+decisions, the hardware testing, and the calls about what was safe to
+automate are mine. Every safety rule in here exists because something failed
+on my machine first.
+
+I have run all of this on my own hardware, and I am responsible for it either
+way.
+
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE). Note in particular the part where it comes with
