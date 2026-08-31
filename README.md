@@ -11,7 +11,8 @@ corrupting anything.
 it is useful.** It is not a supported product.
 
 - It has only ever run on **one machine**: a DS923+ on DSM 7.2, with a
-  4-bay USB enclosure and a single-drive dock.
+  4-bay USB enclosure and a single-drive dock. There are 109 tests, but they
+  cannot tell you it works on *your* hardware.
 - It asks for **root on your NAS** and a **DSM admin password**.
 - It uses an **undocumented DSM API** that Synology can change without notice.
 - It **ejects drives**. Getting that wrong loses data.
