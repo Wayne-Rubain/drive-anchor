@@ -307,17 +307,20 @@ API changed. See the warning at the top of
 
 ---
 
-## Prior art
+## What else is out there
 
-Point solutions exist and may be all you need:
+I looked around before building this. A couple of scripts already exist and
+might be all you need:
 
-- [`aivus/synology-dsm-scripts`](https://github.com/aivus/synology-dsm-scripts)
-  -- eject and remount a USB disk by device name
-- [`schmidhorst/synology-UsbEject`](https://github.com/schmidhorst/synology-UsbEject)
-  -- a DSM package letting non-admins eject devices
+- [aivus/synology-dsm-scripts](https://github.com/aivus/synology-dsm-scripts)
+  ejects and remounts a USB disk by device name
+- [schmidhorst/synology-UsbEject](https://github.com/schmidhorst/synology-UsbEject)
+  is a DSM package that lets non-admin users eject drives
 
-What they do not do is the ordering: bind, release, quiesce, eject, confirm,
-verify. That is the gap this fills.
+What neither of them does is the ordering, and the ordering is what kept
+biting me: release the bind, stop the media server, eject, wait for DSM to
+confirm, then check what actually came back. Skip any one of those and it
+fails quietly.
 
 ---
 
