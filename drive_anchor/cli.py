@@ -28,7 +28,7 @@ from typing import List
 
 from . import binds, config as config_mod, host, quiesce, repair as repair_mod, verify
 from .config import Config, ConfigError
-from .dsm import DsmApiError, DsmClient
+from . import dsm as dsm_mod
 from .sequence import SequenceError, attach, detach, dev_id_for
 
 
@@ -54,6 +54,16 @@ def _load(args) -> Config:
 def cmd_status(cfg: Config, args) -> int:
     print(f"Drive Anchor -- {len(cfg.drives)} drive(s) configured"
           f"{'  [DRY RUN MODE]' if cfg.dry_run else ''}\n")
+
+    # Which way ejects will be performed, and therefore whether credentials
+    # are needed at all. Worth stating plainly: it is the first thing anyone
+    # debugging an eject wants to know.
+    if dsm_mod.needs_credentials(cfg.dsm):
+        have = "set" if cfg.dsm.password else "NOT SET"
+        print(f"  Eject transport: DSM HTTP API, credentials {have}")
+    else:
+        print("  Eject transport: synowebapi (no credentials needed)")
+    print()
 
     missing = quiesce.missing_tools()
     if missing:

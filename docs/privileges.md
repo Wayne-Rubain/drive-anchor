@@ -85,11 +85,23 @@ This is all of it. Not a summary, not the interesting ones. Everything.
 | `test -x <file>` | Checks a Synology tool exists | `status` |
 | `synopkg stop\|start <pkg>` | Pauses/resumes media servers you listed | `detach`, `attach` |
 | `synoindex_mgr --disable-share\|--enable-share` | Pauses/resumes DSM indexing | `detach`, `attach` |
+| `synowebapi --exec api=... method=eject` | Asks DSM to eject a drive | `detach`, `remove` |
 
-Plus one network call: an HTTPS request to **your own NAS** at
-`localhost:5001`, to log in and ask DSM to eject a drive.
+That is the entire list. Eleven commands, and no network calls at all on the
+default settings.
 
-That is the entire list. Ten commands and one local web request.
+### About that last one
+
+`synowebapi` is a Synology command, present on the NAS already, that invokes
+DSM's own internal API locally. It is how Drive Anchor asks DSM to eject a
+drive, and it is the reason **you do not need to give this tool a DSM
+password**. Because it runs locally as root, DSM accepts the request without
+a login.
+
+If your DSM version does not have that command, the tool falls back to making
+an authenticated HTTPS request to **your own NAS** at `localhost:5001`, and
+*that* is the only situation in which an admin account is needed. Run
+`drive-anchor status` and it will tell you which one your install is using.
 
 ---
 

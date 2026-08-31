@@ -124,6 +124,16 @@ class MountTableParsing(unittest.TestCase):
                              "/dev/usb6p1")
             self.assertIsNone(host.device_at("/volume1/nope"))
 
+    def test_device_at_returns_the_LAST_entry_when_binds_are_stacked(self):
+        """Regression. Bind the same path twice and both entries appear in
+        /proc/mounts. The kernel resolves to the last, so returning the first
+        describes a mount nobody can actually reach."""
+        stacked = ("/dev/usb5p1 /volume1/x ext4 rw 0 0\n"
+                   "/dev/usb6p1 /volume1/x ext4 rw 0 0\n")
+        with mock.patch.object(host, "_sh",
+                               return_value=completed(stdout=stacked)):
+            self.assertEqual(host.device_at("/volume1/x"), "/dev/usb6p1")
+
     def test_unreadable_proc_mounts_raises(self):
         """If the mount table cannot be read we know nothing, and guessing
         would be worse than stopping."""
@@ -229,17 +239,46 @@ class ShellQuoting(unittest.TestCase):
 
 
 class Unmount(unittest.TestCase):
-    def test_reports_success_by_checking_afterwards_not_by_exit_code(self):
-        """umount's exit code is unreliable here, so the result is decided by
-        looking at the mount table again."""
-        with mock.patch.object(host, "run_on_host", return_value=completed(code=1)), \
-             mock.patch.object(host, "is_mounted", return_value=False):
+    """Bind mounts stack, so unmounting is not a single operation."""
+
+    def _shrinking(self, counts):
+        """proc_mounts returning counts[i] entries on the i-th call."""
+        seq = iter(counts)
+
+        def fake():
+            return [("/dev/usb1p1", "/volume1/x")] * next(seq)
+        return fake
+
+    def test_single_layer_unmounts(self):
+        with mock.patch.object(host, "run_on_host", return_value=completed()), \
+             mock.patch.object(host, "proc_mounts",
+                               side_effect=self._shrinking([1, 0, 0])):
             self.assertTrue(host.unmount("/volume1/x"))
 
-    def test_reports_failure_when_still_mounted(self):
-        with mock.patch.object(host, "run_on_host", return_value=completed(code=0)), \
-             mock.patch.object(host, "is_mounted", return_value=True):
+    def test_not_mounted_at_all_succeeds_without_running_umount(self):
+        with mock.patch.object(host, "run_on_host") as run, \
+             mock.patch.object(host, "proc_mounts", return_value=[]):
+            self.assertTrue(host.unmount("/volume1/x"))
+        run.assert_not_called()
+
+    def test_STACKED_binds_are_all_removed(self):
+        """Regression. Two binds on one path used to leave it still mounted
+        after a 'successful' release, so a detach reported the drive as
+        released while a live mount was still sitting there. Found by running
+        Drive Anchor alongside another script that binds the same paths."""
+        with mock.patch.object(host, "run_on_host", return_value=completed()) as run, \
+             mock.patch.object(host, "proc_mounts",
+                               side_effect=self._shrinking([2, 1, 1, 0, 0])):
+            self.assertTrue(host.unmount("/volume1/x"))
+        self.assertEqual(run.call_count, 2, "should unmount once per layer")
+
+    def test_a_busy_mount_gives_up_quickly(self):
+        """No point retrying ten times against something genuinely held open."""
+        with mock.patch.object(host, "run_on_host", return_value=completed(code=1)) as run, \
+             mock.patch.object(host, "proc_mounts",
+                               side_effect=self._shrinking([1, 1])):
             self.assertFalse(host.unmount("/volume1/x"))
+        self.assertEqual(run.call_count, 1)
 
 
 class UuidLookup(unittest.TestCase):

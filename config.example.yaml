@@ -48,14 +48,29 @@ drives:
 # ---------------------------------------------------------------------------
 # DSM access
 # ---------------------------------------------------------------------------
-# Ejecting requires an authenticated admin session against DSM's web API.
+# There are two ways to reach DSM's eject API, and the default needs no
+# password at all.
 #
-# CREDENTIALS ARE NOT SET HERE. Provide them in the environment:
-#     DRIVE_ANCHOR_DSM_ACCOUNT
-#     DRIVE_ANCHOR_DSM_PASSWORD
-# Config files get pasted into forum posts and committed to git by accident.
-# Environment variables do not.
+#   auto        Use synowebapi if it exists, otherwise fall back to http.
+#               This is the default and is almost certainly what you want.
+#   synowebapi  /usr/syno/bin/synowebapi, a root-only local command that
+#               invokes DSM's API directly. NO ACCOUNT OR PASSWORD NEEDED,
+#               because it runs locally as root, which this tool already is.
+#   http        An authenticated HTTPS session against DSM on localhost.
+#               Needs an admin account. Kept as a fallback in case your DSM
+#               version does not ship synowebapi.
+#
+# Run `drive-anchor status` and it will tell you which one is in use.
 dsm:
+  transport: auto
+
+  # ---- everything below applies ONLY to the http transport ----------------
+  #
+  # CREDENTIALS ARE NOT SET HERE. Provide them in the environment:
+  #     DRIVE_ANCHOR_DSM_ACCOUNT
+  #     DRIVE_ANCHOR_DSM_PASSWORD
+  # Config files get pasted into forum posts and committed to git by accident.
+  # Environment variables do not.
   host: localhost
   port: 5001
   use_https: true

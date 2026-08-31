@@ -327,5 +327,146 @@ class ApiEndpoints(unittest.TestCase):
         self.assertEqual(dsm.EJECT_API["method"], "eject")
 
 
+def fake_run(stdout="", stderr="", code=0):
+    """Stands in for host.run_on_host."""
+    import subprocess
+    return subprocess.CompletedProcess(args=[], returncode=code,
+                                       stdout=stdout, stderr=stderr)
+
+
+LIST_JSON = """{
+   "data" : { "devices" : [ { "dev_id" : "usb6", "dev_title" : "USB Disk 5" } ] },
+   "success" : true
+}"""
+
+
+class SynoWebApi(unittest.TestCase):
+    """The transport that needs no password.
+
+    It calls /usr/syno/bin/synowebapi, which runs locally as root and is
+    accepted by DSM as SYSTEM_ADMIN without any login.
+    """
+
+    def test_builds_the_expected_command(self):
+        client = dsm.SynoWebApiClient(config())
+        with mock.patch.object(dsm.host, "run_on_host",
+                               return_value=fake_run(LIST_JSON)) as run:
+            client.list_devices()
+        argv = run.call_args[0][0]
+        self.assertEqual(argv[0], dsm.SYNOWEBAPI)
+        self.assertIn("--exec", argv)
+        self.assertIn("api=SYNO.Core.ExternalDevice.Storage.USB", argv)
+        self.assertIn("method=list", argv)
+        self.assertIn("version=1", argv)
+
+    def test_eject_passes_dev_id(self):
+        client = dsm.SynoWebApiClient(config())
+        with mock.patch.object(dsm.host, "run_on_host",
+                               return_value=fake_run('{"success": true}')) as run:
+            self.assertTrue(client.eject("usb6"))
+        self.assertIn("dev_id=usb6", run.call_args[0][0])
+
+    def test_parses_devices_from_stdout(self):
+        client = dsm.SynoWebApiClient(config())
+        with mock.patch.object(dsm.host, "run_on_host",
+                               return_value=fake_run(LIST_JSON)):
+            self.assertEqual(client.list_devices(), [("usb6", "USB Disk 5")])
+
+    def test_progress_chatter_on_stderr_is_ignored(self):
+        """synowebapi writes an 'Exec WebAPI' line to stderr. stdout stays
+        clean JSON, and the parser must not be disturbed by the other."""
+        client = dsm.SynoWebApiClient(config())
+        noise = "[Line 295] Exec WebAPI: api=..., runner=SYSTEM_ADMIN"
+        with mock.patch.object(dsm.host, "run_on_host",
+                               return_value=fake_run(LIST_JSON, stderr=noise)):
+            self.assertEqual(client.list_devices(), [("usb6", "USB Disk 5")])
+
+    def test_exit_zero_with_success_false_still_RAISES(self):
+        """The trap. synowebapi exits 0 even when the request failed, saying
+        so only in the body. Trusting the exit code would report a drive as
+        ejected when DSM refused."""
+        client = dsm.SynoWebApiClient(config())
+        body = '{"error": {"code": 103}, "success": false}'
+        with mock.patch.object(dsm.host, "run_on_host",
+                               return_value=fake_run(body, code=0)):
+            with self.assertRaises(DsmApiError):
+                client.list_devices()
+
+    def test_empty_output_raises_rather_than_looking_like_no_devices(self):
+        client = dsm.SynoWebApiClient(config())
+        with mock.patch.object(dsm.host, "run_on_host",
+                               return_value=fake_run("", stderr="boom")):
+            with self.assertRaises(DsmApiError):
+                client.list_devices()
+
+    def test_non_json_output_raises(self):
+        client = dsm.SynoWebApiClient(config())
+        with mock.patch.object(dsm.host, "run_on_host",
+                               return_value=fake_run("command not found")):
+            with self.assertRaises(DsmApiError):
+                client.list_devices()
+
+    def test_available_reflects_whether_the_command_exists(self):
+        with mock.patch.object(dsm.host, "run_on_host",
+                               return_value=fake_run(code=0)):
+            self.assertTrue(dsm.SynoWebApiClient.available())
+        with mock.patch.object(dsm.host, "run_on_host",
+                               return_value=fake_run(code=1)):
+            self.assertFalse(dsm.SynoWebApiClient.available())
+
+    def test_unreachable_host_means_not_available(self):
+        with mock.patch.object(dsm.host, "run_on_host",
+                               side_effect=dsm.host.HostError("nope")):
+            self.assertFalse(dsm.SynoWebApiClient.available())
+
+
+class TransportSelection(unittest.TestCase):
+    def test_auto_prefers_synowebapi(self):
+        with mock.patch.object(dsm.SynoWebApiClient, "available", return_value=True):
+            self.assertIsInstance(dsm.connect(config(transport="auto")),
+                                  dsm.SynoWebApiClient)
+
+    def test_auto_falls_back_to_http(self):
+        with mock.patch.object(dsm.SynoWebApiClient, "available", return_value=False):
+            self.assertIsInstance(dsm.connect(config(transport="auto")),
+                                  dsm.HttpDsmClient)
+
+    def test_explicit_http_is_honoured_even_when_synowebapi_exists(self):
+        """Needed for diagnosis: you have to be able to force the other path
+        to tell which one is misbehaving."""
+        with mock.patch.object(dsm.SynoWebApiClient, "available", return_value=True):
+            self.assertIsInstance(dsm.connect(config(transport="http")),
+                                  dsm.HttpDsmClient)
+
+    def test_explicit_synowebapi_skips_detection(self):
+        with mock.patch.object(dsm.SynoWebApiClient, "available",
+                               return_value=False) as avail:
+            self.assertIsInstance(dsm.connect(config(transport="synowebapi")),
+                                  dsm.SynoWebApiClient)
+        avail.assert_not_called()
+
+    def test_a_nonsense_transport_is_rejected_loudly(self):
+        with self.assertRaises(DsmApiError):
+            dsm.connect(config(transport="carrier-pigeon"))
+
+
+class CredentialRequirement(unittest.TestCase):
+    """Whether a password is demanded must follow the transport actually used."""
+
+    def test_synowebapi_needs_none(self):
+        self.assertFalse(dsm.needs_credentials(config(transport="synowebapi")))
+
+    def test_http_needs_them(self):
+        self.assertTrue(dsm.needs_credentials(config(transport="http")))
+
+    def test_auto_needs_none_when_synowebapi_is_present(self):
+        with mock.patch.object(dsm.SynoWebApiClient, "available", return_value=True):
+            self.assertFalse(dsm.needs_credentials(config(transport="auto")))
+
+    def test_auto_needs_them_when_it_is_not(self):
+        with mock.patch.object(dsm.SynoWebApiClient, "available", return_value=False):
+            self.assertTrue(dsm.needs_credentials(config(transport="auto")))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

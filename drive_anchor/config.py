@@ -50,6 +50,13 @@ class Drive:
 
 @dataclass
 class DsmConfig:
+    # How to reach DSM's eject API.
+    #   auto       -- use synowebapi if present, else fall back to HTTP.
+    #   synowebapi -- the local root-only command. Needs NO credentials.
+    #   http       -- an authenticated HTTPS session. Needs an admin account.
+    # The settings below only apply to the http transport.
+    transport: str = "auto"
+
     host: str = "localhost"
     port: int = 5001
     use_https: bool = True
@@ -213,6 +220,10 @@ def _build(raw: dict) -> Config:
 def require_credentials(cfg: Config) -> None:
     """Check DSM credentials are present before a sequence that needs them.
 
+    Only called when the chosen transport actually needs them. The default
+    transport (synowebapi) runs locally as root and needs no account at all,
+    so most installations never set these.
+
     Called at the start of an operation rather than at load time, so that
     read-only commands like `list` and `status` work without them.
     """
@@ -223,5 +234,8 @@ def require_credentials(cfg: Config) -> None:
         missing.append(ENV_PASSWORD)
     if missing:
         raise ConfigError(
-            "DSM credentials are not set. This operation needs an admin "
-            "account to call DSM's eject API. Set: " + ", ".join(missing))
+            "DSM credentials are not set, and this install is using the HTTP "
+            "transport, which needs an admin account to call DSM's eject "
+            "API. Set: " + ", ".join(missing) + ".\n"
+            "  If /usr/syno/bin/synowebapi exists on your NAS you can avoid "
+            "credentials entirely by setting dsm.transport: synowebapi.")

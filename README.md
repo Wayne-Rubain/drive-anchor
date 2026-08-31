@@ -17,7 +17,8 @@ it is useful.** It is not a supported product.
   run on every push, but they use mocks throughout, so a green badge means
   the logic is intact and nothing more. It cannot tell you this works on
   *your* hardware.
-- It asks for **root on your NAS** and a **DSM admin password**.
+- It asks for **root on your NAS**. On most systems it needs no password;
+  see below.
 - It uses an **undocumented DSM API** that Synology can change without notice.
 - It **ejects drives**. Getting that wrong loses data.
 
@@ -78,7 +79,15 @@ This is the honest version, because you should not run it otherwise.
 |---|---|
 | `pid: host` | To enter PID 1's mount namespace. Without it, a bind mount would exist only inside the container and be invisible to DSM, Docker, and every package on the NAS. |
 | `privileged: true` | To mount, unmount, and read the host's block devices under `/sys/block`. |
-| DSM admin account | DSM's eject API requires an authenticated admin session. There is no unprivileged way to ask DSM to eject a drive. |
+| A DSM admin account | **Usually not needed.** Only if your DSM lacks `synowebapi` -- see below. |
+
+**About that last row.** Ejecting goes through `/usr/syno/bin/synowebapi`, a
+Synology command already on your NAS that invokes DSM's own API locally. Run
+as root, DSM accepts it without a login, so **no account and no password**.
+
+If that command is missing, the tool falls back to an authenticated HTTPS
+request to your own NAS on `localhost`, and only then is an admin account
+needed. `drive-anchor status` tells you which one you are using.
 
 Together that is **effectively root on your NAS**, and the NAS holds
 everything you own. You should not take that on trust.
@@ -110,19 +119,25 @@ cd drive-anchor
 cp config.example.yaml config.yaml
 ```
 
-Edit `config.yaml`, then create a `.env` beside it:
+Edit `config.yaml`, then:
+
+```bash
+docker compose build
+./drive-anchor status
+```
+
+`status` will report `Eject transport: synowebapi (no credentials needed)`,
+and that is all the setup there is.
+
+**Only if it reports the HTTP transport instead** does your DSM lack
+`synowebapi`, in which case create a `.env` next to `config.yaml`:
 
 ```
 DRIVE_ANCHOR_DSM_ACCOUNT=your_admin_user
 DRIVE_ANCHOR_DSM_PASSWORD=your_password
 ```
 
-Both files are gitignored. Keep it that way.
-
-```bash
-docker compose build
-./drive-anchor status
-```
+`config.yaml` and `.env` are both gitignored. Keep it that way.
 
 This container is **not a daemon**. It runs one command and exits, so there
 is nothing to `up -d` and nothing left running afterwards.

@@ -28,9 +28,9 @@ from typing import List, Optional, Tuple
 
 import requests
 
-from . import binds, quiesce, verify
+from . import binds, host, quiesce, verify
 from .config import Config, Drive, require_credentials
-from .dsm import DsmApiError, DsmClient
+from .dsm import DsmApiError, connect, needs_credentials
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +66,10 @@ def detach(cfg: Config, only: List[Drive] = None) -> None:
     default is deliberate -- an unmanaged drive left spinning is exactly the
     one nobody remembers to handle.
     """
-    require_credentials(cfg)
+    # Only demanded when the transport actually needs them. The default path
+    # calls DSM locally as root and needs no account.
+    if needs_credentials(cfg.dsm):
+        require_credentials(cfg)
     targets = only if only is not None else cfg.drives
 
     log.info("Step 1: pausing services that hold the drives open")
@@ -88,7 +91,7 @@ def detach(cfg: Config, only: List[Drive] = None) -> None:
 
     log.info("Step 3: ejecting via DSM")
     try:
-        with DsmClient(cfg.dsm) as dsm:
+        with connect(cfg.dsm) as dsm:
             devices = dsm.list_devices()
             if only is not None:
                 wanted = {dev_id_for(d) for d in targets}
@@ -99,7 +102,7 @@ def detach(cfg: Config, only: List[Drive] = None) -> None:
                 log.info("  DSM reports %d device(s): %s", len(devices),
                          ", ".join(f"{t} ({i})" for i, t in devices))
             unconfirmed = [t for i, t in devices if not dsm.eject_with_retry(i, t)]
-    except (DsmApiError, requests.RequestException) as exc:
+    except (DsmApiError, requests.RequestException, host.HostError) as exc:
         # Explicitly not swallowed. If DSM could not be asked, we do not know
         # whether the drives are safe, and saying nothing would let a caller
         # assume they are.
