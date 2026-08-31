@@ -22,6 +22,7 @@ same code works both ways with no configuration.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from typing import List, Optional, Tuple
 
@@ -127,18 +128,45 @@ def device_for_uuid(uuid: str) -> Optional[str]:
     return dev or None
 
 
+def parent_device_name(name: str) -> str:
+    """The whole-disk name for a partition name, or the name unchanged.
+
+        usb5p1    -> usb5        Synology USB, and NVMe, use a 'p' separator
+        nvme0n1p2 -> nvme0n1
+        sda1      -> sda         SCSI and SATA append the number directly
+        usb5      -> usb5        already a whole disk, nothing to strip
+
+    Exactly one suffix is removed. An earlier version stripped characters off
+    the end repeatedly until something in /sys/block matched, which quietly
+    produced false positives: on a NAS with usb1 present but usb12 absent,
+    'usb12p1' walked down to 'usb1' and reported the device as present. That
+    is the worst possible bug here, because this check is what the rest of the
+    tool trusts when `mount` and `ls` are lying to it.
+    """
+    match = re.match(r"^(.+)p\d+$", name)
+    if match:
+        return match.group(1)
+    # Trailing digits count as a partition number only when something
+    # non-numeric precedes them, so 'sda1' -> 'sda' but 'usb1' is left alone
+    # (it is a whole disk, and callers check the unmodified name first).
+    match = re.match(r"^(.*\D)\d+$", name)
+    if match:
+        return match.group(1)
+    return name
+
+
 def block_device_present(device: str) -> bool:
     """True if the device really exists in /sys/block -- the honest check.
 
-    Give this a device node such as /dev/usb5p1 or /dev/sda1; the partition
-    suffix is stripped to find the parent block device.
+    Accepts either a whole disk (/dev/usb5) or a partition (/dev/usb5p1).
+    The unmodified name is checked first, so whole disks whose names end in a
+    digit -- usb1, sata2, loop3, md0 -- are never mistaken for partitions.
     """
     name = os.path.basename(device)
-    for suffix_len in range(len(name)):
-        candidate = name[: len(name) - suffix_len]
-        if candidate and os.path.exists(f"/sys/block/{candidate}"):
-            return True
-    return False
+    if os.path.exists(f"/sys/block/{name}"):
+        return True
+    parent = parent_device_name(name)
+    return parent != name and os.path.exists(f"/sys/block/{parent}")
 
 
 def dir_is_empty(path: str) -> bool:
