@@ -86,6 +86,11 @@ to audit one thing before running this, audit that.
 Credentials are read from the environment only, never from the config file,
 so they cannot end up in a screenshot or a git commit.
 
+**[docs/privileges.md](docs/privileges.md) lists every command this tool will
+ever run as root** -- all ten of them -- explains what each permission is
+for, and shows you how to verify those claims yourself without reading any
+Python. Worth reading before you install this.
+
 ---
 
 ## Installing
@@ -213,6 +218,11 @@ undo.
 4. Paste that into the `drives:` list in `config.yaml` and edit the name
    and path
 5. `./drive-anchor attach --live`
+
+**[docs/drives.md](docs/drives.md) covers this properly**, including how to
+tell which kind of share you actually have, and how to recover if you already
+created one the wrong way. The wrong way looks like it worked and can quietly
+fill your internal disk, so it is worth five minutes.
 
 ### Removing a drive
 
