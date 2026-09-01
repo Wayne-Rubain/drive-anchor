@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from drive_anchor import config as config_mod          # noqa: E402
 from drive_anchor.config import ConfigError            # noqa: E402
+from drive_anchor import verify as verify_mod          # noqa: E402
 from drive_anchor.verify import (                      # noqa: E402
     DEVICE_ABSENT, EMPTY_STUB, NOT_MOUNTED, Problem)
 from drive_anchor.config import Drive                  # noqa: E402
@@ -163,6 +164,15 @@ class ProblemClassification(unittest.TestCase):
         self.assertFalse(
             Problem(self.drive, EMPTY_STUB).device_is_absent,
             "an empty stub means the drive is live -- never treat it as gone")
+
+    def test_stacked_read_only_and_unwritable_are_NOT_absent(self):
+        """All three mean the hardware IS present and only the mount is
+        wrong. Treating them as absent would power-cycle a live drive."""
+        for reason in (verify_mod.stacked(2), verify_mod.READ_ONLY,
+                       verify_mod.NOT_WRITABLE):
+            self.assertFalse(
+                Problem(self.drive, reason).device_is_absent,
+                f"{reason!r} must not be treated as absent hardware")
 
     def test_problem_renders_path_and_reason(self):
         self.assertEqual(str(Problem(self.drive, NOT_MOUNTED)),

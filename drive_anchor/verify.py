@@ -32,6 +32,12 @@ from .config import Config, Drive
 NOT_MOUNTED = "not mounted"
 DEVICE_ABSENT = "mounted, but the backing device is gone"
 EMPTY_STUB = "mounted but empty"
+READ_ONLY = "mounted read-only"
+NOT_WRITABLE = "mounted, but will not accept a write"
+
+
+def stacked(layers: int) -> str:
+    return f"{layers} mounts stacked on the same path"
 
 
 @dataclass
@@ -46,9 +52,10 @@ class Problem:
 
         Callers use this to tell apart the two failure kinds, because the
         right response differs sharply. An absent device may be recoverable
-        by waiting or by power-cycling it. A mounted-but-empty path means
-        the hardware *is* present and the bind is wrong -- power-cycling
-        that would cut a live drive for nothing.
+        by waiting or by power-cycling it. Every other reason here --
+        stacked, read-only, not-writable, empty -- means the hardware IS
+        present and only the mount is wrong, so power-cycling would cut a
+        live drive for nothing. Those are fixed by re-binding instead.
         """
         return self.reason in (NOT_MOUNTED, DEVICE_ABSENT)
 
@@ -57,12 +64,32 @@ class Problem:
 
 
 def check_drive(drive: Drive) -> Optional[Problem]:
-    """Verify one drive. Returns None when healthy."""
-    device = host.device_at(drive.path)
-    if not device:
+    """Verify one drive. Returns None when healthy.
+
+    Order matters. Stacking is checked first because it is what produces the
+    other faults: a stale layer underneath is invisible to anything that looks
+    only at the effective mount. Then the device, then whether the filesystem
+    will actually take a write, and only then whether there is content.
+    """
+    layers = host.mount_layers(drive.path)
+    if layers == 0:
         return Problem(drive, NOT_MOUNTED)
-    if not host.block_device_present(device):
+    if layers > 1:
+        return Problem(drive, stacked(layers))
+
+    device = host.device_at(drive.path)
+    if not device or not host.block_device_present(device):
         return Problem(drive, DEVICE_ABSENT)
+
+    # EXT4 remounts read-only on I/O error, which leaves a mount that is
+    # structurally perfect and completely useless.
+    if host.is_read_only(drive.path):
+        return Problem(drive, READ_ONLY)
+
+    # And the mount options can still lie, so actually try it.
+    if not host.can_write(drive.path):
+        return Problem(drive, NOT_WRITABLE)
+
     if host.dir_is_empty(drive.path):
         return Problem(drive, EMPTY_STUB)
     return None

@@ -58,6 +58,9 @@ and skipping any of them fails in a way that looks like success:
 - `mount`, `df`, `ls` and `touch` all keep reporting success against a
   device that has physically gone away, because the kernel serves stale
   cache -- so your health check says fine while the drive is not there
+- bind mounts **stack**, so re-binding a path without fully unmounting it
+  leaves the old mount underneath, where nothing looking at the effective
+  mount will ever see it
 
 Drive Anchor does those steps in the right order and **confirms each one**.
 
@@ -306,6 +309,20 @@ Raise `bind_wait_sec` before concluding the drive is faulty.
 
 **A drive shows "mounted but empty"** -- the device is present but the bind
 is wrong. Re-run `attach`. Do not power-cycle the drive; it is live.
+
+**A drive shows "N mounts stacked on the same path"** -- something bound the
+path more than once. Bind mounts stack, and the kernel resolves to the last
+one, so a stale layer underneath is invisible to anything that only checks the
+effective mount. This is the fault that hides the others: a dead read-only
+layer can sit beneath a perfectly good one, and writes land on the dead one.
+Run `attach --live`, which unmounts every layer before rebinding.
+
+**A drive shows "mounted read-only"** or **"will not accept a write"** -- EXT4
+remounts a filesystem read-only when it hits an I/O error, which is correct
+behaviour and completely silent. Structurally the mount still looks perfect.
+Usually the drive dropped off the bus briefly. `attach --live` will rebind it;
+if the reason persists, the underlying filesystem needs checking rather than
+the mount.
 
 **A drive shows "mounted, but the backing device is gone"** -- this is the
 stale bind, and it is the reason the device check exists. The drive dropped

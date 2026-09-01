@@ -89,17 +89,73 @@ def _sh(script: str, timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProc
 # those commands.
 # ---------------------------------------------------------------------------
 
-def proc_mounts() -> List[Tuple[str, str]]:
-    """Every (device, mountpoint) pair the host currently has mounted."""
+def mount_entries() -> List[Tuple[str, str, str]]:
+    """Every (device, mountpoint, options) the host currently has mounted.
+
+    Options matter: EXT4 remounts a filesystem read-only when it hits an I/O
+    error, and a read-only mount is structurally indistinguishable from a
+    healthy one unless you look at this field.
+    """
     result = _sh("cat /proc/mounts")
     if result.returncode != 0:
         raise HostError(f"could not read /proc/mounts: {result.stderr.strip()}")
-    pairs = []
+    entries = []
     for line in result.stdout.splitlines():
         parts = line.split()
-        if len(parts) >= 2:
-            pairs.append((parts[0], parts[1]))
-    return pairs
+        if len(parts) >= 3:
+            entries.append((parts[0], parts[1], parts[3] if len(parts) > 3 else ""))
+    return entries
+
+
+def proc_mounts() -> List[Tuple[str, str]]:
+    """Every (device, mountpoint) pair the host currently has mounted."""
+    return [(dev, mp) for dev, mp, _ in mount_entries()]
+
+
+def mount_layers(path: str) -> int:
+    """How many mounts are stacked at `path`.
+
+    More than one is a fault, not a curiosity. Bind mounts stack: mount the
+    same path twice and both entries exist, with the kernel resolving to the
+    last. A stale layer underneath a healthy one is invisible to every check
+    that looks only at the effective mount -- and on 2026-09-01 that hid a
+    dead READ-ONLY mount beneath a good one, so a 30GB copy wrote into
+    nothing while every health check reported OK.
+    """
+    return sum(1 for _, mp, _ in mount_entries() if mp == path)
+
+
+def is_read_only(path: str) -> bool:
+    """True if the effective mount at `path` is mounted read-only."""
+    opts = None
+    for _, mp, options in mount_entries():
+        if mp == path:
+            opts = options        # last wins, same as the kernel
+    if opts is None:
+        return False
+    return "ro" in opts.split(",")
+
+
+# A fixed name, deliberately. If a run is killed between the write and the
+# delete, at most ONE stale probe can exist per path, and the next run
+# overwrites it rather than littering.
+WRITE_PROBE = ".drive-anchor-writetest"
+
+
+def can_write(path: str) -> bool:
+    """Whether `path` will actually accept a write.
+
+    The only check that proves the thing that matters. Mount options can say
+    `rw` while the filesystem is wedged, the device is half-gone, or share
+    permissions are wrong -- and a backup target that silently refuses writes
+    looks perfectly healthy to every structural test.
+    """
+    probe = f"{path.rstrip('/')}/{WRITE_PROBE}"
+    result = run_on_host(["touch", probe], timeout=30)
+    if result.returncode != 0:
+        return False
+    run_on_host(["rm", "-f", probe], timeout=30)
+    return True
 
 
 def is_mounted(path: str) -> bool:

@@ -1,9 +1,11 @@
 # What this tool does with root access
 
-Drive Anchor asks for a lot: administrator rights on your NAS, and your DSM
-admin password. Your NAS probably holds your photos, your documents, and your
-backups. You should not hand that over to a stranger's project because a
-README told you it was fine.
+Drive Anchor asks for a lot: administrator rights on your NAS. Your NAS
+probably holds your photos, your documents, and your backups. You should not
+hand that over to a stranger's project because a README told you it was fine.
+
+On most systems it does **not** need a DSM password, for the reason explained
+under `synowebapi` below.
 
 This page exists so you can check for yourself, without reading Python.
 
@@ -34,9 +36,12 @@ Creating that second door is an operation only the system administrator can
 perform. Hence root.
 
 The second reason is ejecting. Safely disconnecting a USB drive on a
-Synology means asking DSM itself to do it, and DSM will only take that
-instruction from an administrator account. There is no unprivileged way to
-ask.
+Synology means asking DSM itself to do it, and there is no unprivileged way
+to ask.
+
+The third is verification. A mount can look perfect and still refuse every
+write, so the tool writes a small probe file to each drive to prove otherwise.
+That needs the same access as everything else here.
 
 ---
 
@@ -58,14 +63,20 @@ Docker, and to your media server.
 Without this, mounts would exist **only inside the container** and vanish
 when it exits. The tool would appear to work and change nothing.
 
-### A DSM administrator account
+### A DSM administrator account — usually not needed
 
-Used for exactly one thing: asking DSM to eject a drive, through the same
-internal interface Storage Manager uses when you click the eject button.
+Ejecting goes through `synowebapi`, a Synology command already on your NAS
+that invokes DSM's own API locally. Run as root it is accepted without any
+login, so **no account and no password**.
 
-The account name and password are read from the environment, never from the
-configuration file. Config files get shared in forum posts and committed to
-Git by accident. This one cannot leak that way, because it is not in there.
+An account is needed only if your DSM lacks that command, in which case the
+tool falls back to an authenticated HTTPS request to localhost. Run
+`drive-anchor status` and it tells you which path your install is using.
+
+If you do need one, the account name and password are read from the
+environment, never from the configuration file. Config files get shared in
+forum posts and committed to Git by accident. This one cannot leak that way,
+because it is not in there.
 
 ---
 
@@ -86,9 +97,27 @@ This is all of it. Not a summary, not the interesting ones. Everything.
 | `synopkg stop\|start <pkg>` | Pauses/resumes media servers you listed | `detach`, `attach` |
 | `synoindex_mgr --disable-share\|--enable-share` | Pauses/resumes DSM indexing | `detach`, `attach` |
 | `synowebapi --exec api=... method=eject` | Asks DSM to eject a drive | `detach`, `remove` |
+| `touch <path>/.drive-anchor-writetest` | Proves the drive will actually accept a write | `status`, `attach`, `repair` |
+| `rm -f <path>/.drive-anchor-writetest` | Removes that probe file immediately after | same |
 
-That is the entire list. Eleven commands, and no network calls at all on the
-default settings.
+That is the entire list. Thirteen commands, and no network calls at all on
+the default settings.
+
+### Why it writes a file to your drives
+
+Two of those commands create and delete a small probe file, and that deserves
+an explanation rather than a footnote.
+
+Every other check is structural: is it mounted, is the device real, is there
+content. All of those can pass on a filesystem that refuses every write. EXT4
+remounts read-only the moment it hits an I/O error, and a read-only mount is
+indistinguishable from a healthy one unless you look for it. A backup target
+in that state looks perfect and silently accepts nothing.
+
+Actually writing is the only check that proves the thing that matters. The
+probe uses a fixed name, so if a run is interrupted between the write and the
+delete, at most one stale file can ever exist per drive, and the next run
+overwrites it.
 
 ### About that last one
 

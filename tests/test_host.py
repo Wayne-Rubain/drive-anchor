@@ -293,5 +293,70 @@ class UuidLookup(unittest.TestCase):
             self.assertIsNone(host.device_for_uuid("abc"))
 
 
+class MountLayers(unittest.TestCase):
+    """Stacking is a fault, and it is the one that hides the others."""
+
+    STACKED = ("/dev/usb5p1 /volume1/x ext4 ro,relatime 0 0\n"
+               "/dev/usb6p1 /volume1/x ext4 rw,relatime 0 0\n"
+               "/dev/usb1p1 /volume1/y ext4 rw,relatime 0 0\n")
+
+    def _patched(self):
+        return mock.patch.object(host, "_sh",
+                                 return_value=completed(stdout=self.STACKED))
+
+    def test_counts_layers(self):
+        with self._patched():
+            self.assertEqual(host.mount_layers("/volume1/x"), 2)
+            self.assertEqual(host.mount_layers("/volume1/y"), 1)
+            self.assertEqual(host.mount_layers("/volume1/nope"), 0)
+
+    def test_read_only_uses_the_LAST_layer_like_the_kernel(self):
+        """The first layer here is ro and the second is rw. The kernel
+        resolves to the last, so the path is writable and must not be
+        reported read-only."""
+        with self._patched():
+            self.assertFalse(host.is_read_only("/volume1/x"))
+
+    def test_detects_a_read_only_effective_mount(self):
+        ro = "/dev/usb1p1 /volume1/x ext4 ro,relatime 0 0\n"
+        with mock.patch.object(host, "_sh", return_value=completed(stdout=ro)):
+            self.assertTrue(host.is_read_only("/volume1/x"))
+
+    def test_relatime_is_not_mistaken_for_ro(self):
+        """Naive substring matching would see 'ro' inside other options."""
+        rw = "/dev/usb1p1 /volume1/x ext4 rw,relatime,errors=remount-ro 0 0\n"
+        with mock.patch.object(host, "_sh", return_value=completed(stdout=rw)):
+            self.assertFalse(host.is_read_only("/volume1/x"))
+
+    def test_unmounted_path_is_not_read_only(self):
+        with mock.patch.object(host, "_sh", return_value=completed(stdout="")):
+            self.assertFalse(host.is_read_only("/volume1/x"))
+
+
+class WriteProbe(unittest.TestCase):
+    """Mount options can say rw while the filesystem refuses writes."""
+
+    def test_successful_probe_is_cleaned_up(self):
+        with mock.patch.object(host, "run_on_host",
+                               return_value=completed()) as run:
+            self.assertTrue(host.can_write("/volume1/x"))
+        cmds = [c[0][0] for c in run.call_args_list]
+        self.assertEqual(cmds[0][0], "touch")
+        self.assertEqual(cmds[1][0], "rm", "the probe file must be removed")
+        self.assertTrue(cmds[0][1].endswith(host.WRITE_PROBE))
+
+    def test_failed_probe_reports_false_and_does_not_try_to_delete(self):
+        with mock.patch.object(host, "run_on_host",
+                               return_value=completed(code=1)) as run:
+            self.assertFalse(host.can_write("/volume1/x"))
+        self.assertEqual(run.call_count, 1)
+
+    def test_trailing_slash_does_not_produce_a_double_slash(self):
+        with mock.patch.object(host, "run_on_host",
+                               return_value=completed()) as run:
+            host.can_write("/volume1/x/")
+        self.assertNotIn("//", run.call_args_list[0][0][0][1])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
