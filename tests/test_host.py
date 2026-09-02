@@ -358,5 +358,67 @@ class WriteProbe(unittest.TestCase):
         self.assertNotIn("//", run.call_args_list[0][0][0][1])
 
 
+
+class FailureIsNotAnAnswer(unittest.TestCase):
+    """A check that cannot fail loudly is worse than no check.
+
+    Both of these shipped reporting a definite state when the underlying
+    command had actually failed. They are the same mistake the tool exists to
+    catch -- absence of evidence read as evidence of a specific state -- so
+    they get their own tests.
+    """
+
+    def test_dir_is_empty_raises_when_it_cannot_read_the_path(self):
+        """Must NOT report "empty" for a directory it failed to read.
+
+        The original ran `ls -A <p> 2>/dev/null | head -1`: stderr discarded,
+        and the exit status was head's, so a missing path was indistinguishable
+        from an empty one. Both gave empty stdout and returncode 0.
+        """
+        with mock.patch.object(host, "run_on_host") as run:
+            run.return_value = subprocess.CompletedProcess(
+                [], 2, stdout="", stderr="find: '/gone': No such file or directory")
+            with self.assertRaises(host.HostError) as ctx:
+                host.dir_is_empty("/gone")
+            self.assertIn("/gone", str(ctx.exception))
+
+    def test_dir_is_empty_true_only_on_a_successful_empty_listing(self):
+        with mock.patch.object(host, "run_on_host") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            self.assertTrue(host.dir_is_empty("/volume1/x"))
+
+    def test_dir_is_empty_false_when_an_entry_is_found(self):
+        with mock.patch.object(host, "run_on_host") as run:
+            run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout="/volume1/x/Movies", stderr="")
+            self.assertFalse(host.dir_is_empty("/volume1/x"))
+
+    def test_dir_is_empty_stops_at_the_first_entry(self):
+        """-print -quit keeps this cheap on a directory with a million files."""
+        with mock.patch.object(host, "run_on_host") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            host.dir_is_empty("/volume1/x")
+            argv = run.call_args[0][0]
+        self.assertIn("-quit", argv)
+        self.assertIn("-maxdepth", argv)
+
+    def test_uuid_lookup_absent_is_not_confused_with_lookup_failure(self):
+        """blkid exit 2 means "no such UUID" -- a real answer. Anything else
+        means the lookup broke, and must not be reported as absent hardware."""
+        with mock.patch.object(host, "run_on_host") as run:
+            run.return_value = subprocess.CompletedProcess([], 2, stdout="", stderr="")
+            self.assertIsNone(host.device_for_uuid("dead-beef"))
+
+            run.return_value = subprocess.CompletedProcess(
+                [], 4, stdout="", stderr="blkid: cannot open /dev/null")
+            with self.assertRaises(host.HostError):
+                host.device_for_uuid("dead-beef")
+
+    def test_uuid_lookup_returns_the_device_on_success(self):
+        with mock.patch.object(host, "run_on_host") as run:
+            run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout="/dev/usb1p1", stderr="")
+            self.assertEqual(host.device_for_uuid("abc"), "/dev/usb1p1")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

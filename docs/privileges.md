@@ -89,7 +89,7 @@ This is all of it. Not a summary, not the interesting ones. Everything.
 | `blkid` | Lists filesystems and their IDs | `list`, `add` |
 | `blkid -U <id>` | Finds which disk has a given ID | Any bind operation |
 | `cat /proc/mounts` | Reads what is currently mounted | Every command |
-| `ls -A <path>` | Checks whether a folder is empty | Verification |
+| `find <path> -mindepth 1 -maxdepth 1 -print -quit` | Checks whether a folder is empty, stopping at the first entry | Verification |
 | `mkdir -p <path>` | Creates the folder the drive will appear at | `attach`, `repair` |
 | `mount --bind <a> <b>` | Makes the drive appear at your chosen path | `attach`, `repair` |
 | `umount <path>` | Removes that second door | `detach` |
@@ -172,9 +172,9 @@ grep -n "run_on_host(\[" drive_anchor/*.py
 
 That prints most of the table above, straight from the code.
 
-Two entries will not show up there: `cat /proc/mounts` and `ls -A`. Those go
-through a small helper for reading text, so they appear as
-`run_on_host(["sh", "-c", script])` instead. To see them:
+One entry will not show up there: `cat /proc/mounts`. It goes through a small
+helper for reading text, so it appears as
+`run_on_host(["sh", "-c", script])` instead. To see it:
 
 ```bash
 grep -n "_sh(" drive_anchor/host.py
@@ -183,6 +183,23 @@ grep -n "_sh(" drive_anchor/host.py
 Between those two commands you have seen every command this tool can run.
 There is no third route -- `run_on_host` is the only function that executes
 anything, and `_sh` just calls it.
+
+### Why it uses `find` rather than `ls` to test for emptiness
+
+`ls -A <path> 2>/dev/null | head -1` looks like the obvious way to ask whether
+a directory has anything in it, and it was what this did originally. It is
+wrong in a way worth spelling out, because it is the same mistake this tool
+exists to catch.
+
+Redirecting stderr threw away the reason for a failure, and piping into `head`
+meant the exit status belonged to `head`, which succeeds however badly `ls`
+failed. So a missing path, a permission error, and a genuinely empty directory
+were indistinguishable: all three gave empty output and success. The check
+could report "empty" but never "I could not tell".
+
+`find <path> -mindepth 1 -maxdepth 1 -print -quit` keeps its own exit status,
+so a failure is reported as a failure. `-quit` stops at the first entry, so it
+stays cheap on a directory holding a million files.
 
 **3. Check for network calls.**
 

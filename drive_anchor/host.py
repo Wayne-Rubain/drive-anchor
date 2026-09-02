@@ -191,6 +191,13 @@ def device_for_uuid(uuid: str) -> Optional[str]:
     when devices are re-enumerated in a different order.
     """
     result = run_on_host(["blkid", "-U", uuid], timeout=30)
+    # blkid exits 2 for "no such UUID", which is a real answer: the drive is
+    # not attached. Any OTHER non-zero code means the lookup itself failed,
+    # and reporting that as "absent" would be a guess dressed as a fact --
+    # the caller would wait out its timeout blaming the hardware.
+    if result.returncode not in (0, 2):
+        raise HostError(
+            f"blkid lookup for {uuid} failed: {result.stderr.strip()}")
     dev = result.stdout.strip()
     return dev or None
 
@@ -237,10 +244,32 @@ def block_device_present(device: str) -> bool:
 
 
 def dir_is_empty(path: str) -> bool:
-    """True if `path` has no entries. An empty bind target is the classic
-    silent failure: the mount looks present, the directory is a stub, and
-    anything reading it sees an empty library rather than an error."""
-    result = _sh(f"ls -A {_quote(path)} 2>/dev/null | head -1")
+    """True if `path` has no entries. Raises HostError if it cannot be read.
+
+    An empty bind target is the classic silent failure: the mount looks
+    present, the directory is a stub, and anything reading it sees an empty
+    library rather than an error.
+
+    The first version of this could not tell "empty" from "broken", and said
+    empty for both:
+
+        ls -A <path> 2>/dev/null | head -1
+
+    `2>/dev/null` threw away the reason, and piping into `head` meant the exit
+    status belonged to `head` -- which succeeds no matter how badly `ls` failed.
+    A missing path, a permission error and a genuinely empty directory all
+    produced empty stdout and returncode 0.
+
+    That is the same mistake this whole tool exists to catch: treating the
+    absence of evidence as evidence of a specific state. `find -print -quit`
+    fixes it properly -- it stops at the first entry, so it stays cheap on a
+    directory holding a million files, and its exit status is its own.
+    """
+    result = run_on_host(
+        ["find", path, "-mindepth", "1", "-maxdepth", "1", "-print", "-quit"])
+    if result.returncode != 0:
+        raise HostError(
+            f"could not read {path}: {result.stderr.strip() or 'find failed'}")
     return result.stdout.strip() == ""
 
 
