@@ -12,7 +12,9 @@ DETACH
 ATTACH
   1. Bind by UUID        -- waiting for hardware that may be slow to appear
   2. Verify              -- mounted, device real, and not an empty stub
-  3. Resume services     -- only if step 2 passed
+  3. Fix containers      -- restart any still holding the drive's OLD device,
+                            only if step 2 passed
+  4. Resume services     -- only if step 2 passed
 
 The rule that matters most: **a sequence reports success only when every
 step it claims to have done was confirmed.** A detach that says "safe" while
@@ -28,7 +30,7 @@ from typing import List, Optional, Tuple
 
 import requests
 
-from . import binds, host, quiesce, verify
+from . import binds, containers, host, quiesce, verify
 from .config import Config, Drive, require_credentials
 from .dsm import DsmApiError, connect, needs_credentials
 
@@ -122,7 +124,7 @@ def detach(cfg: Config, only: List[Drive] = None) -> None:
     log.info("All drives released and confirmed ejected. Safe to remove power.")
 
 
-def attach(cfg: Config) -> Tuple[bool, List[verify.Problem]]:
+def attach(cfg: Config) -> Tuple[bool, List[object]]:
     """Bind drives to their fixed paths and verify. Returns (ok, problems).
 
     Does not raise on failure. A partial attach is a state a person needs
@@ -135,6 +137,8 @@ def attach(cfg: Config) -> Tuple[bool, List[verify.Problem]]:
     if cfg.dry_run:
         log.info("Step 2: [dry run] would verify every path is mounted, "
                  "backed by a real device, and non-empty")
+        log.info("Step 3: [dry run] would restart any container still "
+                 "holding a drive's old device")
         return True, []
 
     log.info("Step 2: verifying")
@@ -154,7 +158,18 @@ def attach(cfg: Config) -> Tuple[bool, List[verify.Problem]]:
             time.sleep(cfg.verify_retry_sec)
             binds.bind_all(cfg)
 
-    ok = not problems
-    log.info("Step 3: resuming services")
-    quiesce.resume(cfg, start_packages=ok)
-    return ok, problems
+    drives_ok = not problems
+    log.info("Step 3: checking containers that use these drives")
+    if drives_ok:
+        # Only now. Restarting a container while its drive is still missing
+        # would bind it to an empty stub, which is worse than the stale mount.
+        _, stuck = containers.check_and_fix(cfg)
+        problems = problems + stuck
+    else:
+        log.info("  skipped -- the drives did not verify")
+
+    log.info("Step 4: resuming services")
+    # Media packages depend on the drives, not on containers, so a container
+    # problem alone is no reason to leave them stopped.
+    quiesce.resume(cfg, start_packages=drives_ok)
+    return not problems, problems

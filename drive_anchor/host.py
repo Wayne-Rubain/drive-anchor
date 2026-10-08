@@ -21,12 +21,18 @@ same code works both ways with no configuration.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 DEFAULT_TIMEOUT = 60
+
+# Resolved on the host's PATH. On DSM 7, Container Manager installs a
+# /usr/local/bin/docker symlink to its own binary.
+DOCKER = "docker"
 
 
 class HostError(RuntimeError):
@@ -36,6 +42,11 @@ class HostError(RuntimeError):
     treat that as meaningful (e.g. `umount` failing because nothing was
     mounted) rather than as an error.
     """
+
+
+class CommandNotFound(HostError):
+    """The program does not exist here. Lets a caller treat an optional tool
+    (docker) as absent rather than broken."""
 
 
 def _needs_nsenter() -> bool:
@@ -65,6 +76,8 @@ def run_on_host(argv: List[str], timeout: int = DEFAULT_TIMEOUT) -> subprocess.C
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise HostError(f"timed out after {timeout}s: {' '.join(argv)}")
+    except FileNotFoundError as exc:
+        raise CommandNotFound(f"could not run {' '.join(argv)}: {exc}")
     except OSError as exc:
         raise HostError(f"could not run {' '.join(argv)}: {exc}")
 
@@ -273,9 +286,99 @@ def dir_is_empty(path: str) -> bool:
     return result.stdout.strip() == ""
 
 
+@dataclass
+class Container:
+    """A running container and the host paths it has bind-mounted."""
+    name: str
+    pid: int
+    binds: List[Tuple[str, str]] = field(default_factory=list)  # (source, destination)
+
+
+def running_containers() -> Optional[List[Container]]:
+    """Every running container with its bind mounts, or None if Docker is
+    not installed at all.
+
+    None and [] mean different things and callers rely on that: None is "this
+    NAS has no Docker, there is nothing to check", [] is "Docker is here and
+    nothing is running". A Docker that is installed but will not answer raises
+    HostError instead -- reporting that as "no containers" would be a guess
+    dressed as a fact, and the stale mount it might be hiding is the exact
+    fault this check exists to find.
+    """
+    try:
+        ps = run_on_host([DOCKER, "ps", "-q", "--no-trunc"], timeout=30)
+    except CommandNotFound:
+        return None             # running natively, and there is no docker
+    if ps.returncode != 0:
+        # 127 is what nsenter exits with when the program does not exist.
+        if ps.returncode == 127:
+            return None
+        raise HostError(f"docker ps failed: {(ps.stderr or ps.stdout).strip()}")
+    ids = ps.stdout.split()
+    if not ids:
+        return []
+
+    info = run_on_host([DOCKER, "inspect"] + ids, timeout=60)
+    if info.returncode != 0:
+        raise HostError(
+            f"docker inspect failed: {(info.stderr or info.stdout).strip()}")
+    try:
+        data = json.loads(info.stdout)
+    except ValueError as exc:
+        raise HostError(f"could not parse docker inspect output: {exc}")
+
+    containers = []
+    for c in data:
+        binds = [(m.get("Source", ""), m.get("Destination", ""))
+                 for m in c.get("Mounts") or []
+                 if m.get("Type") == "bind"]
+        containers.append(Container(
+            name=(c.get("Name") or "").lstrip("/"),
+            pid=int((c.get("State") or {}).get("Pid") or 0),
+            binds=binds))
+    return containers
+
+
+def _unescape_mount_field(value: str) -> str:
+    """/proc/*/mounts escapes space, tab, newline and backslash as octal."""
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), value)
+
+
+def container_mount_devices(pid: int) -> Dict[str, str]:
+    """{mountpoint: device} as a container sees its own mounts.
+
+    Read from /proc/<pid>/mounts on the host, i.e. from inside the
+    container's mount namespace. This is the only place a stale container
+    mount is visible: the host's own table already shows the new device, and
+    `docker inspect` reports the source PATH, which has not changed. What
+    went stale is the device behind that path, as captured when the
+    container started.
+    """
+    result = run_on_host(["cat", f"/proc/{int(pid)}/mounts"], timeout=30)
+    if result.returncode != 0:
+        raise HostError(f"could not read mounts of pid {pid}: "
+                        f"{result.stderr.strip()}")
+    found = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            found[_unescape_mount_field(parts[1])] = _unescape_mount_field(parts[0])
+    return found
+
+
 # ---------------------------------------------------------------------------
 # Changing host state
 # ---------------------------------------------------------------------------
+
+def restart_container(name: str, timeout: int = 120) -> Tuple[bool, str]:
+    """Restart one container. Returns (ok, output).
+
+    Docker re-resolves every bind mount when a container starts, so this is
+    what moves a container off a device that no longer exists and onto the
+    one now at the same path.
+    """
+    result = run_on_host([DOCKER, "restart", name], timeout=timeout)
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
 
 def make_dir(path: str) -> None:
     result = run_on_host(["mkdir", "-p", path])

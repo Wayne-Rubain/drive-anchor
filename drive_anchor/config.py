@@ -106,12 +106,31 @@ class RepairConfig:
 
 
 @dataclass
+class ContainersConfig:
+    """Docker containers holding a mount of a drive that has since moved.
+
+    A container resolves its bind mounts once, when it starts. If a drive then
+    drops off the USB bus and comes back -- DSM gives it a new device name --
+    the host's paths are rebound correctly, but the container keeps the old,
+    dead device behind the same path. Nothing on the host looks wrong.
+
+    restart_stale -- restart such containers, which re-resolves their mounts.
+                     False means detect and report only.
+    exclude       -- container names never to restart automatically.
+    """
+    restart_stale: bool = True
+    exclude: List[str] = field(default_factory=list)
+    restart_timeout_sec: int = 120
+
+
+@dataclass
 class Config:
     dry_run: bool = True
     drives: List[Drive] = field(default_factory=list)
     dsm: DsmConfig = field(default_factory=DsmConfig)
     quiesce: QuiesceConfig = field(default_factory=QuiesceConfig)
     repair: RepairConfig = field(default_factory=RepairConfig)
+    containers: ContainersConfig = field(default_factory=ContainersConfig)
     bind_wait_sec: int = 90
     bind_poll_sec: int = 3
     verify_attempts: int = 3
@@ -204,12 +223,23 @@ def _build(raw: dict) -> Config:
     repair = RepairConfig(**{k: v for k, v in r_raw.items()
                              if k in RepairConfig.__dataclass_fields__})
 
+    c_raw = raw.get("containers") or {}
+    if not isinstance(c_raw, dict):
+        raise ConfigError("'containers' must be a mapping")
+    containers = ContainersConfig(**{k: v for k, v in c_raw.items()
+                                     if k in ContainersConfig.__dataclass_fields__})
+    if not isinstance(containers.exclude, list):
+        raise ConfigError("'containers.exclude' must be a list of names")
+    containers.exclude = [str(n) for n in containers.exclude]
+    containers.restart_stale = bool(containers.restart_stale)
+
     cfg = Config(
         dry_run=bool(raw.get("dry_run", True)),
         drives=drives,
         dsm=dsm,
         quiesce=quiesce,
         repair=repair,
+        containers=containers,
     )
     for key in ("bind_wait_sec", "bind_poll_sec", "verify_attempts", "verify_retry_sec"):
         if key in raw:

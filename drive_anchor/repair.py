@@ -24,6 +24,12 @@ would wait the full timeout for each one and fix nothing, and on a slow
 enclosure that can take longer than the interval the job runs on. Report it
 and let a person look.
 
+**Containers count too.** A container still holding a drive's old device is
+fixed by restarting it, and that restart is a repair like any other: it is
+capped, and it only happens once the drives themselves verify. This is the
+case where every host-side check is green and the backup job is still
+writing nowhere, so it is checked even when the drives are healthy.
+
 **Too many repairs in an hour.** Self-healing that silently papers over a
 drive dropping off the bus every ten minutes is worse than no self-healing,
 because nobody ever learns the drive is dying. Past the cap it stops and says
@@ -38,7 +44,7 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional
 
-from . import binds, verify
+from . import binds, containers, host, verify
 from .config import Config
 from .verify import Problem
 
@@ -47,6 +53,7 @@ log = logging.getLogger(__name__)
 HEALTHY = "healthy"
 PARTIAL = "partial"
 WHOLESALE = "wholesale"
+CONTAINERS = "containers"     # drives fine, a container holds an old device
 
 
 @dataclass
@@ -54,7 +61,7 @@ class Outcome:
     """What a repair run did, and whether anyone needs to know."""
     situation: str
     repaired: List[str]
-    remaining: List[Problem]
+    remaining: List[object]     # verify.Problem, containers.StaleMount, or str
     refused_reason: Optional[str] = None
     repairs_this_hour: int = 0
 
@@ -162,9 +169,8 @@ def run(cfg: Config) -> Outcome:
     situation = classify(problems, len(cfg.drives))
 
     if situation == HEALTHY:
-        log.info("All %d drive(s) present and populated. Nothing to do.",
-                 len(cfg.drives))
-        return Outcome(HEALTHY, [], [])
+        log.info("All %d drive(s) present and populated.", len(cfg.drives))
+        return _repair_containers(cfg)
 
     for p in problems:
         log.warning("  %s", p)
@@ -205,11 +211,58 @@ def run(cfg: Config) -> Outcome:
         if ok:
             repaired.append(problem.drive.label)
 
-    remaining = verify.check_all(cfg)
+    remaining: List[object] = list(verify.check_all(cfg))
     if not remaining:
         log.info("  repaired: all %d drive(s) now verify", len(cfg.drives))
+        # Same incident, same repair: a drive that moved may have left a
+        # container behind. Not counted against the cap a second time.
+        restarted, stuck = containers.check_and_fix(cfg)
+        repaired += [f"container {n}" for n in restarted]
+        remaining += stuck
     else:
         log.error("  still broken after repair:")
         for p in remaining:
             log.error("    - %s", p)
     return Outcome(PARTIAL, repaired, remaining, repairs_this_hour=used + 1)
+
+
+def _repair_containers(cfg: Config) -> Outcome:
+    """The drives are fine. Is any container still on a drive's old device?"""
+    try:
+        stale = containers.find_stale(cfg)
+    except host.HostError as exc:
+        reason = f"could not check containers: {exc}"
+        log.error("  %s", reason)
+        return Outcome(CONTAINERS, [], [], refused_reason=reason)
+    if not stale:
+        log.info("Nothing to do.")
+        return Outcome(HEALTHY, [], [])
+
+    for s in stale:
+        log.warning("  %s", s)
+
+    used = repairs_last_hour(cfg)
+    if used >= cfg.repair.max_per_hour:
+        reason = (f"already repaired {used} time(s) in the last hour "
+                  f"(limit {cfg.repair.max_per_hour}). Containers keep losing "
+                  f"their drive, which usually means it is dropping off the "
+                  f"USB bus. Not restarting them again.")
+        log.error("  %s", reason)
+        return Outcome(CONTAINERS, [], list(stale), refused_reason=reason,
+                       repairs_this_hour=used)
+
+    if cfg.dry_run:
+        containers.restart_stale(cfg, stale)
+        return Outcome(CONTAINERS, [], list(stale),
+                       refused_reason="dry run -- nothing was changed")
+
+    record_repair(cfg)
+    restarted, _ = containers.restart_stale(cfg, stale)
+    try:
+        # Anything skipped (excluded, or restart failed) is still stale, so
+        # it shows up here and keeps the exit code non-zero.
+        remaining = list(containers.find_stale(cfg) or [])
+    except host.HostError as exc:
+        remaining = [f"could not re-check containers: {exc}"]
+    return Outcome(CONTAINERS, [f"container {n}" for n in restarted],
+                   remaining, repairs_this_hour=used + 1)

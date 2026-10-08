@@ -127,6 +127,29 @@ repair:
   state_dir: /data/state
 
 # ---------------------------------------------------------------------------
+# Containers
+# ---------------------------------------------------------------------------
+# A Docker container works out which disk is behind each folder it mounts
+# once, when it starts. If a drive drops off the USB bus and comes back, DSM
+# gives it a new device name and the container keeps the OLD one -- a disk
+# that no longer exists. Every check on the NAS itself looks fine, and the
+# container's writes go nowhere.
+#
+# `status` reports this, and `attach` and `repair` fix it by restarting the
+# container. Only containers that mount one of the drives above are ever
+# looked at, and only ones holding the wrong disk are restarted. If Docker is
+# not installed, this is skipped.
+containers:
+  # false = report stale containers but never restart them
+  restart_stale: true
+
+  # Container names never to restart automatically, e.g. a database you
+  # would rather stop cleanly yourself.
+  exclude: []
+
+  restart_timeout_sec: 120
+
+# ---------------------------------------------------------------------------
 # Timing
 # ---------------------------------------------------------------------------
 # How long to wait for a drive to appear after power or a reconnect.

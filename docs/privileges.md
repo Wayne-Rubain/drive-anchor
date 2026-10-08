@@ -99,9 +99,27 @@ This is all of it. Not a summary, not the interesting ones. Everything.
 | `synowebapi --exec api=... method=eject` | Asks DSM to eject a drive | `detach`, `remove` |
 | `touch <path>/.drive-anchor-writetest` | Proves the drive will actually accept a write | `status`, `attach`, `repair` |
 | `rm -f <path>/.drive-anchor-writetest` | Removes that probe file immediately after | same |
+| `docker ps -q --no-trunc` | Lists running containers, if Docker is installed | `status`, `attach`, `repair` |
+| `docker inspect <ids>` | Reads which host folders each container has mounted | same |
+| `cat /proc/<pid>/mounts` | Reads which disk a container actually has behind those folders | same |
+| `docker restart <name>` | Restarts a container still holding a drive's old, vanished disk | `attach`, `repair` |
 
-That is the entire list. Thirteen commands, and no network calls at all on
-the default settings.
+That is the entire list. Seventeen commands, and no network calls at all on
+the default settings. (`docker` talks to the Docker daemon on the NAS itself,
+through its local socket.)
+
+### Why it restarts containers
+
+A container works out which disk sits behind each folder it mounts once, when
+it starts. If a USB drive drops off and comes back, DSM gives it a new device
+name, and the container keeps pointing at the old one, which no longer
+exists. The NAS itself looks completely healthy. The container's writes fail.
+
+So the tool looks inside each running container that mounts one of **your
+configured drives**, and restarts it only when the disk it holds is not the
+disk now at that path. Containers that do not use your drives are never
+touched. Set `containers.restart_stale: false` to report without restarting,
+or list names under `containers.exclude` to leave specific ones alone.
 
 ### Why it writes a file to your drives
 

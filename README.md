@@ -219,6 +219,29 @@ still mounted, `ls` still lists files from cache, and writes still appear to
 succeed while landing nowhere. The gap between breaking and noticing is the
 gap in which a backup job reports success and writes nothing.
 
+### Containers left on the old disk
+
+A container works out which disk is behind each folder it mounts once, when
+it starts. So if a drive drops off the USB bus and comes back -- an enclosure
+hiccup, a loose cable -- DSM gives it a new device name, the stable paths get
+rebound, and every check on the NAS is green. But a container that was
+already running still holds the old device, which no longer exists. A backup
+container in that state fails every night with errors like "Cannot create
+directory", and nothing on the NAS itself looks wrong.
+
+Drive Anchor looks inside each running container that mounts one of your
+configured drives and compares the disk it holds with the disk now at that
+path:
+
+- `status` reports any mismatch and exits non-zero
+- `attach` and `repair` restart those containers, once the drives themselves
+  verify, which makes Docker re-resolve the mounts
+
+Restarts count toward `repair`'s hourly cap, for the same reason re-binds
+do. Containers that do not use your drives are never touched. To report
+without restarting, set `containers.restart_stale: false`; to protect a
+specific container, list it under `containers.exclude`.
+
 ### Running it on a schedule
 
 The wrapper takes an absolute path, which is what DSM's Task Scheduler wants.

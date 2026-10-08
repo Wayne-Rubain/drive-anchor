@@ -27,6 +27,7 @@ import sys
 from typing import List
 
 from . import binds, config as config_mod, host, quiesce, repair as repair_mod, verify
+from . import containers as containers_mod
 from .config import Config, ConfigError
 from . import dsm as dsm_mod
 from .sequence import SequenceError, attach, detach, dev_id_for
@@ -79,11 +80,34 @@ def cmd_status(cfg: Config, args) -> int:
         else:
             print(f"  PROBLEM  {drive.name:<24} {problem.reason}")
 
-    if not problems:
+    # Containers resolve their mounts at start, so one can still hold a
+    # drive's OLD device after the drive came back under a new name. Every
+    # line above can be OK while that container writes nowhere.
+    container_trouble = []
+    try:
+        stale = containers_mod.find_stale(cfg)
+    except host.HostError as exc:
+        stale = []
+        container_trouble.append(f"could not check containers: {exc}")
+    if stale is None:
+        print("\n  Containers: docker not found, nothing to check")
+    elif not stale and not container_trouble:
+        print("\n  Containers: none holding a stale drive mount")
+    else:
+        print()
+        container_trouble += [str(s) for s in stale]
+        for line in container_trouble:
+            print(f"  PROBLEM  {line}")
+
+    if not problems and not container_trouble:
         print(f"\nAll {len(cfg.drives)} drive(s) present and populated.")
         return 0
-    print(f"\n{len(problems)} drive(s) need attention. "
-          f"Try: drive-anchor attach --live")
+    if problems:
+        print(f"\n{len(problems)} drive(s) need attention. "
+              f"Try: drive-anchor attach --live")
+    if container_trouble:
+        print("\nA container is still using a drive's old device. "
+              "Try: drive-anchor repair --live")
     return 1
 
 
@@ -143,11 +167,11 @@ def cmd_attach(cfg: Config, args) -> int:
     if ok:
         print("\nDone. All drives are bound and verified.")
         return 0
-    print("\nFINISHED WITH PROBLEMS -- these paths are not right:",
-          file=sys.stderr)
+    print("\nFINISHED WITH PROBLEMS:", file=sys.stderr)
     for p in problems:
         print(f"  - {p}", file=sys.stderr)
-    if cfg.quiesce.packages:
+    drive_trouble = any(isinstance(p, verify.Problem) for p in problems)
+    if drive_trouble and cfg.quiesce.packages:
         print("\nMedia packages were deliberately left stopped so they do not "
               "scan a half-mounted library.", file=sys.stderr)
     return 1
